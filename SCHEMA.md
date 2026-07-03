@@ -92,12 +92,14 @@ create table apps (
   workspace_id    uuid references workspaces(id) on delete cascade not null,
   name            text,                          -- populated from DNA extraction
   source_url      text not null,                 -- the URL the user pasted
-  product_type    text default 'other',          -- 'developer_tool' | 'mobile_app' | 'web_app' | 'saas' | 'other'
+  product_type    text default 'other',          -- 'developer_tool' | 'mobile_app' | 'web_app' | 'saas' | 'browser_extension' | 'other'
   dna             jsonb,                         -- extracted DNA object (see DNA schema below)
   status          text not null default 'pending',
   -- status values: 'pending' | 'extracting' | 'strategy_pending' | 'awaiting_approval' | 'active' | 'paused' | 'error'
   is_paused       boolean not null default false,
   error_message   text,                          -- populated if status = 'error'
+  additional_context text null,                  -- optional free-text context typed by the user at onboarding
+  doc_paths       text[],                        -- Supabase Storage paths (bucket 'app-docs') for uploaded supporting docs
   created_at      timestamp with time zone default now(),
   updated_at      timestamp with time zone default now()
 );

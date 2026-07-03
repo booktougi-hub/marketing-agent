@@ -171,3 +171,9 @@ When in doubt about whether something is in scope, check PHASES.md. If it is not
 3. Read SCHEMA.md if the task involves the database
 4. Ask what specific task is needed today
 5. Build only that task. Confirm it works before moving on.
+
+<!-- TRIGGER.DEV SKILLS START -->
+## Trigger.dev agent skills
+
+This project has Trigger.dev agent skills installed in `.claude/skills/`. Before writing or changing Trigger.dev code (background tasks, scheduled tasks, realtime, or chat.agent AI agents), load the most relevant skill: `trigger-realtime-and-frontend`, `trigger-getting-started`, `trigger-cost-savings`, `trigger-chat-agent-advanced`, `trigger-authoring-tasks`, `trigger-authoring-chat-agent`.
+<!-- TRIGGER.DEV SKILLS END -->

@@ -41,6 +41,7 @@ export type ProductType =
   | "mobile_app"
   | "web_app"
   | "saas"
+  | "browser_extension"
   | "other";
 
 export type AppStatus =
@@ -76,6 +77,8 @@ export interface App {
   status: AppStatus;
   is_paused: boolean;
   error_message: string | null;
+  additional_context: string | null;
+  doc_paths: string[] | null;
   created_at: string;
   updated_at: string;
 }

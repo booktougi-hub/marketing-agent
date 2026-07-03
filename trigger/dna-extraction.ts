@@ -1,0 +1,226 @@
+import { logger, schemaTask, tasks } from "@trigger.dev/sdk";
+import Anthropic from "@anthropic-ai/sdk";
+import FirecrawlApp from "@mendable/firecrawl-js";
+import mammoth from "mammoth";
+import { PDFParse } from "pdf-parse";
+import { z } from "zod";
+import { supabaseAdmin } from "@/lib/supabase-server";
+import type { strategyGeneration } from "@/trigger/strategy-generation";
+
+const CLAUDE_MODEL = "claude-sonnet-4-20250514";
+
+const firecrawl = new FirecrawlApp({ apiKey: process.env.FIRECRAWL_API_KEY! });
+const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY! });
+
+const payloadSchema = z.object({
+  app_id: z.string(),
+  workspace_id: z.string(),
+  source_url: z.string().url(),
+  has_additional_context: z.boolean(),
+  has_docs: z.boolean(),
+});
+
+const dnaSchema = z.object({
+  name: z.string(),
+  tagline: z.string(),
+  problem: z.string(),
+  features: z.array(z.string()),
+  target_audience: z.string(),
+  pricing: z.string(),
+  competitors: z.array(z.string()),
+  tone: z.enum(["casual", "professional", "technical"]),
+  additional_urls: z.array(z.string()),
+});
+
+const SYSTEM_PROMPT = `You are extracting a structured "DNA" profile for a software product from raw source material.
+
+You may receive content from multiple sources: the app website, additional context provided by the developer, and supporting documents. Use all sources together to extract the most accurate and complete information.
+
+Respond with ONLY a JSON object matching this exact shape — no prose, no markdown code fences:
+{
+  "name": string,
+  "tagline": string,
+  "problem": string,
+  "features": string[],
+  "target_audience": string,
+  "pricing": string,
+  "competitors": string[],
+  "tone": "casual" | "professional" | "technical",
+  "additional_urls": string[]
+}`;
+
+function getExtension(path: string) {
+  return path.split(".").pop()?.toLowerCase() ?? "";
+}
+
+async function extractDocText(path: string): Promise<string | null> {
+  const { data, error } = await supabaseAdmin.storage
+    .from("app-docs")
+    .download(path);
+
+  if (error || !data) {
+    logger.error("Failed to download supporting document", {
+      path,
+      error: error?.message,
+    });
+    return null;
+  }
+
+  const extension = getExtension(path);
+
+  try {
+    if (extension === "pdf") {
+      const buffer = Buffer.from(await data.arrayBuffer());
+      const parser = new PDFParse({ data: buffer });
+      const result = await parser.getText();
+      await parser.destroy();
+      return result.text;
+    }
+
+    if (extension === "docx") {
+      const buffer = Buffer.from(await data.arrayBuffer());
+      const result = await mammoth.extractRawText({ buffer });
+      return result.value;
+    }
+
+    if (extension === "txt" || extension === "md") {
+      return await data.text();
+    }
+
+    logger.warn("Unsupported document type, skipping", { path, extension });
+    return null;
+  } catch (err) {
+    logger.error("Failed to extract text from document", {
+      path,
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return null;
+  }
+}
+
+export const dnaExtraction = schemaTask({
+  id: "dna-extraction",
+  schema: payloadSchema,
+  run: async (payload) => {
+    const { app_id, workspace_id, source_url } = payload;
+
+    try {
+      let scrapedMarkdown = "";
+      try {
+        const scraped = await firecrawl.scrapeUrl(source_url, {
+          formats: ["markdown"],
+        });
+        if ("markdown" in scraped && scraped.markdown) {
+          scrapedMarkdown = scraped.markdown;
+        }
+      } catch (err) {
+        logger.warn("Firecrawl scrape failed, continuing with other sources", {
+          source_url,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+
+      // Step 2A — additional context
+      const { data: appRow, error: appRowError } = await supabaseAdmin
+        .from("apps")
+        .select("additional_context, doc_paths")
+        .eq("id", app_id)
+        .eq("workspace_id", workspace_id)
+        .single();
+
+      if (appRowError) {
+        throw new Error(`Failed to load app record: ${appRowError.message}`);
+      }
+
+      const additionalContext: string | null =
+        appRow.additional_context?.trim() || null;
+
+      // Step 2B — extract text from uploaded documents
+      const docPaths: string[] = appRow.doc_paths ?? [];
+      const docTexts: string[] = [];
+
+      for (const path of docPaths) {
+        const text = await extractDocText(path);
+        if (text?.trim()) {
+          docTexts.push(text.trim());
+        }
+      }
+
+      if (!scrapedMarkdown && !additionalContext && docTexts.length === 0) {
+        throw new Error(
+          "No content available to extract DNA from (scrape, context, and docs all empty)."
+        );
+      }
+
+      // Step 2C — combined context block
+      const combinedContext = `
+=== APP WEBSITE CONTENT ===
+${scrapedMarkdown}
+
+${additionalContext ? `=== ADDITIONAL CONTEXT PROVIDED BY DEVELOPER ===\n${additionalContext}` : ""}
+
+${docTexts.length > 0 ? `=== SUPPORTING DOCUMENTS ===\n${docTexts.map((text, i) => `Document ${i + 1}:\n${text}`).join("\n\n")}` : ""}
+`.trim();
+
+      logger.info(
+        `DNA extraction used: website scrape ${scrapedMarkdown ? "yes" : "no"} + additional context ${additionalContext ? "yes" : "no"} + ${docTexts.length} documents`
+      );
+
+      const message = await anthropic.messages.create({
+        model: CLAUDE_MODEL,
+        max_tokens: 2048,
+        system: SYSTEM_PROMPT,
+        messages: [
+          {
+            role: "user",
+            content: `Extract the app DNA from the following content:\n\n${combinedContext}`,
+          },
+        ],
+      });
+
+      let responseText = "";
+      for (const block of message.content) {
+        if (block.type === "text") {
+          responseText += block.text;
+        }
+      }
+      responseText = responseText
+        .trim()
+        .replace(/^```(?:json)?\s*/i, "")
+        .replace(/```\s*$/i, "");
+
+      let dna: z.infer<typeof dnaSchema>;
+      try {
+        dna = dnaSchema.parse(JSON.parse(responseText));
+      } catch (err) {
+        throw new Error(
+          `Claude returned an unparseable DNA object: ${err instanceof Error ? err.message : String(err)}`
+        );
+      }
+
+      await supabaseAdmin
+        .from("apps")
+        .update({ name: dna.name, dna, status: "strategy_pending" })
+        .eq("id", app_id)
+        .eq("workspace_id", workspace_id);
+
+      await tasks.trigger<typeof strategyGeneration>("strategy-generation", {
+        app_id,
+        workspace_id,
+      });
+
+      return { app_id, status: "strategy_pending" as const };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "DNA extraction failed.";
+      logger.error("dna-extraction failed", { app_id, workspace_id, error: message });
+
+      await supabaseAdmin
+        .from("apps")
+        .update({ status: "error", error_message: message })
+        .eq("id", app_id)
+        .eq("workspace_id", workspace_id);
+
+      throw err;
+    }
+  },
+});
