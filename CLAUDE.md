@@ -31,7 +31,7 @@
 | Image generation | Google Gemini API | Nano Banana Pro via Gemini |
 | Image processing | Sharp | Resizing and compression only |
 | Web scraping | Firecrawl API | DNA extraction from app URLs |
-| LLM — strategy | Anthropic Claude | Model: claude-sonnet-4-20250514 ONLY |
+| LLM — strategy | Anthropic Claude | Model: claude-sonnet-5 ONLY |
 | LLM — content | OpenRouter | Free Llama 3.3 70B for bulk content generation |
 | Cold email | Instantly.ai API | Sending only |
 | Prospect research | Apollo.io API | Contact sourcing |
@@ -132,7 +132,7 @@
 - Always pass `workspace_id` and `app_id` as part of the job payload. Never query without them.
 
 ### LLM Calls
-- **Claude model:** always use `claude-sonnet-4-20250514`. Never use a different model string.
+- **Claude model:** always use `claude-sonnet-5`. Never use a different model string.
 - **Bulk content generation:** use OpenRouter with `meta-llama/llama-3.3-70b-instruct:free`.
 - Always parse LLM JSON responses inside a try/catch. Never assume valid JSON.
 - Always include a system prompt that specifies the output format before the user prompt.
@@ -150,7 +150,7 @@
 2. **Never expose service role key client-side.** Zero exceptions.
 3. **Never hardcode API keys.** Zero exceptions.
 4. **Never build V2+ features during V1.** If the feature is not in the V1 checklist in PHASES.md, it does not get built now.
-5. **Never use a different Claude model string.** Only `claude-sonnet-4-20250514`.
+5. **Never use a different Claude model string.** Only `claude-sonnet-5`.
 6. **Never send emails or publish posts without the workspace approval gate** — for cold email and ad spend specifically.
 7. **Never store workspace credentials (OAuth tokens, API keys) in plaintext.** Encrypt with AES-256 before storing.
 

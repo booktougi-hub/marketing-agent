@@ -7,10 +7,7 @@ import { z } from "zod";
 import { supabaseAdmin } from "@/lib/supabase-server";
 import type { strategyGeneration } from "@/trigger/strategy-generation";
 
-const CLAUDE_MODEL = "claude-sonnet-4-20250514";
-
-const firecrawl = new FirecrawlApp({ apiKey: process.env.FIRECRAWL_API_KEY! });
-const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY! });
+const CLAUDE_MODEL = "claude-sonnet-5";
 
 const payloadSchema = z.object({
   app_id: z.string(),
@@ -104,8 +101,14 @@ export const dnaExtraction = schemaTask({
   run: async (payload) => {
     const { app_id, workspace_id, source_url } = payload;
 
+    logger.info("dna-extraction: run started", { app_id, workspace_id, source_url });
+
     try {
+      const firecrawl = new FirecrawlApp({ apiKey: process.env.FIRECRAWL_API_KEY! });
+      const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY! });
+
       let scrapedMarkdown = "";
+      logger.info("dna-extraction: scraping URL", { source_url });
       try {
         const scraped = await firecrawl.scrapeUrl(source_url, {
           formats: ["markdown"],
@@ -113,14 +116,19 @@ export const dnaExtraction = schemaTask({
         if ("markdown" in scraped && scraped.markdown) {
           scrapedMarkdown = scraped.markdown;
         }
+        logger.info("dna-extraction: scrape finished", {
+          got_markdown: !!scrapedMarkdown,
+          markdown_length: scrapedMarkdown.length,
+        });
       } catch (err) {
-        logger.warn("Firecrawl scrape failed, continuing with other sources", {
+        logger.warn("dna-extraction: Firecrawl scrape failed, continuing with other sources", {
           source_url,
           error: err instanceof Error ? err.message : String(err),
         });
       }
 
       // Step 2A — additional context
+      logger.info("dna-extraction: loading app record", { app_id });
       const { data: appRow, error: appRowError } = await supabaseAdmin
         .from("apps")
         .select("additional_context, doc_paths")
@@ -139,12 +147,18 @@ export const dnaExtraction = schemaTask({
       const docPaths: string[] = appRow.doc_paths ?? [];
       const docTexts: string[] = [];
 
+      logger.info("dna-extraction: extracting supporting documents", {
+        doc_count: docPaths.length,
+      });
       for (const path of docPaths) {
         const text = await extractDocText(path);
         if (text?.trim()) {
           docTexts.push(text.trim());
         }
       }
+      logger.info("dna-extraction: document extraction finished", {
+        extracted_count: docTexts.length,
+      });
 
       if (!scrapedMarkdown && !additionalContext && docTexts.length === 0) {
         throw new Error(
@@ -166,6 +180,10 @@ ${docTexts.length > 0 ? `=== SUPPORTING DOCUMENTS ===\n${docTexts.map((text, i) 
         `DNA extraction used: website scrape ${scrapedMarkdown ? "yes" : "no"} + additional context ${additionalContext ? "yes" : "no"} + ${docTexts.length} documents`
       );
 
+      logger.info("dna-extraction: calling Claude", {
+        model: CLAUDE_MODEL,
+        context_length: combinedContext.length,
+      });
       const message = await anthropic.messages.create({
         model: CLAUDE_MODEL,
         max_tokens: 2048,
@@ -176,6 +194,10 @@ ${docTexts.length > 0 ? `=== SUPPORTING DOCUMENTS ===\n${docTexts.map((text, i) 
             content: `Extract the app DNA from the following content:\n\n${combinedContext}`,
           },
         ],
+      });
+      logger.info("dna-extraction: Claude call finished", {
+        stop_reason: message.stop_reason,
+        usage: message.usage,
       });
 
       let responseText = "";
@@ -193,10 +215,16 @@ ${docTexts.length > 0 ? `=== SUPPORTING DOCUMENTS ===\n${docTexts.map((text, i) 
       try {
         dna = dnaSchema.parse(JSON.parse(responseText));
       } catch (err) {
+        logger.error("dna-extraction: failed to parse Claude's response", {
+          raw_response: responseText.slice(0, 2000),
+          error: err instanceof Error ? err.message : String(err),
+        });
         throw new Error(
           `Claude returned an unparseable DNA object: ${err instanceof Error ? err.message : String(err)}`
         );
       }
+
+      logger.info("dna-extraction: DNA parsed successfully", { name: dna.name });
 
       await supabaseAdmin
         .from("apps")
@@ -204,15 +232,24 @@ ${docTexts.length > 0 ? `=== SUPPORTING DOCUMENTS ===\n${docTexts.map((text, i) 
         .eq("id", app_id)
         .eq("workspace_id", workspace_id);
 
+      logger.info("dna-extraction: app row updated to strategy_pending", { app_id });
+
       await tasks.trigger<typeof strategyGeneration>("strategy-generation", {
         app_id,
         workspace_id,
       });
 
+      logger.info("dna-extraction: strategy-generation triggered", { app_id });
+
       return { app_id, status: "strategy_pending" as const };
     } catch (err) {
       const message = err instanceof Error ? err.message : "DNA extraction failed.";
-      logger.error("dna-extraction failed", { app_id, workspace_id, error: message });
+      logger.error("dna-extraction failed", {
+        app_id,
+        workspace_id,
+        error: message,
+        stack: err instanceof Error ? err.stack : undefined,
+      });
 
       await supabaseAdmin
         .from("apps")

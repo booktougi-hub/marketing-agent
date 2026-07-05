@@ -106,7 +106,11 @@ export async function POST(request: NextRequest) {
       .eq("id", workspaceId)
       .single();
 
-    if (workspace?.plan_tier === "free") {
+    // TODO(prod): this gate is disabled outside production so the free-tier
+    // limit doesn't block local testing. Before shipping, verify the check
+    // still works end-to-end in production and consider driving it off
+    // something more explicit than NODE_ENV (e.g. a feature flag).
+    if (process.env.NODE_ENV === "production" && workspace?.plan_tier === "free") {
       const { count } = await supabaseAdmin
         .from("apps")
         .select("id", { count: "exact", head: true })

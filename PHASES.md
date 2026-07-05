@@ -87,7 +87,7 @@ Before moving to V2, ALL of the following must be true:
 - [ ] Build `/trigger/dna-extraction.ts`
   - Input: `{ app_id, workspace_id, source_url }`
   - Call Firecrawl API to scrape URL
-  - Call Claude claude-sonnet-4-20250514 with extraction prompt
+  - Call Claude claude-sonnet-5 with extraction prompt
   - Save DNA JSON to apps table
   - Update status to 'strategy_pending'
   - Trigger `strategy-generation` job
@@ -97,7 +97,7 @@ Before moving to V2, ALL of the following must be true:
 - [ ] Build `/trigger/strategy-generation.ts`
   - Input: `{ app_id, workspace_id }`
   - Read app DNA from Supabase
-  - Call Claude claude-sonnet-4-20250514 with strategy prompt
+  - Call Claude claude-sonnet-5 with strategy prompt
   - Insert strategy record with status = 'draft'
   - Update app status to 'awaiting_approval'
   - On error: set app status to 'error'

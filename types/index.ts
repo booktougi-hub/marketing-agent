@@ -51,7 +51,8 @@ export type AppStatus =
   | "awaiting_approval"
   | "active"
   | "paused"
-  | "error";
+  | "error"
+  | "deleted";
 
 export type AppTone = "casual" | "professional" | "technical";
 
@@ -67,6 +68,10 @@ export interface AppDna {
   additional_urls: string[];
 }
 
+// Shape not finalized yet — populated when the settings screen is built.
+// Untyped on purpose rather than guessing fields ahead of that work.
+export type AppSettings = Record<string, unknown>;
+
 export interface App {
   id: string;
   workspace_id: string;
@@ -79,6 +84,11 @@ export interface App {
   error_message: string | null;
   additional_context: string | null;
   doc_paths: string[] | null;
+  reanalysis_credits_used: number;
+  reanalysis_credits_reset_at: string | null;
+  url_changed_at: string | null;
+  deleted_at: string | null;
+  app_settings: AppSettings;
   created_at: string;
   updated_at: string;
 }
@@ -267,6 +277,7 @@ export interface EmailInteraction {
   replied_at: string | null;
   instantly_id: string | null;
   created_at: string;
+  actioned_at: string | null;
 }
 
 // ---------------------------------------------------------------------------

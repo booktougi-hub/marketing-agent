@@ -95,11 +95,16 @@ create table apps (
   product_type    text default 'other',          -- 'developer_tool' | 'mobile_app' | 'web_app' | 'saas' | 'browser_extension' | 'other'
   dna             jsonb,                         -- extracted DNA object (see DNA schema below)
   status          text not null default 'pending',
-  -- status values: 'pending' | 'extracting' | 'strategy_pending' | 'awaiting_approval' | 'active' | 'paused' | 'error'
+  -- status values: 'pending' | 'extracting' | 'strategy_pending' | 'awaiting_approval' | 'active' | 'paused' | 'error' | 'deleted'
   is_paused       boolean not null default false,
   error_message   text,                          -- populated if status = 'error'
   additional_context text null,                  -- optional free-text context typed by the user at onboarding
   doc_paths       text[],                        -- Supabase Storage paths (bucket 'app-docs') for uploaded supporting docs
+  reanalysis_credits_used      integer default 0,             -- how many manual re-analyses (re-running DNA extraction) used this billing period
+  reanalysis_credits_reset_at  timestamp with time zone,      -- when reanalysis_credits_used resets to 0
+  url_changed_at  timestamp with time zone,      -- set when the user edits source_url after initial DNA extraction
+  deleted_at      timestamp with time zone,      -- soft delete — set instead of removing the row; excluded by RLS (see policy below)
+  app_settings    jsonb default '{}'::jsonb,     -- scheduling and notification preferences (settings screen)
   created_at      timestamp with time zone default now(),
   updated_at      timestamp with time zone default now()
 );
@@ -108,7 +113,8 @@ alter table apps enable row level security;
 
 create policy "apps_all" on apps
   for all using (
-    workspace_id in (
+    deleted_at is null
+    and workspace_id in (
       select workspace_id from workspace_members
       where user_id = auth.uid()
     )
@@ -117,6 +123,15 @@ create policy "apps_all" on apps
 create index idx_apps_workspace_id on apps(workspace_id);
 create index idx_apps_status on apps(status);
 ```
+
+> **Migration note (2026-07-05):** `reanalysis_credits_used`, `reanalysis_credits_reset_at`,
+> `url_changed_at`, `deleted_at`, and `app_settings` were added after the table already
+> existed in production, via `add_settings_columns_to_apps`. The `apps_all` RLS policy
+> was updated in a separate migration (`add_soft_delete_filter_to_apps_policy`) to add
+> `deleted_at is null` to its `USING` clause, so every existing query automatically
+> excludes soft-deleted apps — no application code changes required for that part.
+> `additional_context`, `doc_paths`, `product_type`, and `is_paused` already existed
+> before this change; they're listed above in their original positions.
 
 **DNA JSON structure (saved in `dna` column):**
 ```json
@@ -378,7 +393,8 @@ create table email_interactions (
   clicked_at      timestamp with time zone,
   replied_at      timestamp with time zone,
   instantly_id    text,            -- ID returned by Instantly.ai
-  created_at      timestamp with time zone default now()
+  created_at      timestamp with time zone default now(),
+  actioned_at     timestamp with time zone  -- set when a team member marks a reply as handled (dashboard-only, no pipeline writes this yet)
 );
 
 alter table email_interactions enable row level security;
@@ -394,6 +410,11 @@ create policy "interactions_all" on email_interactions
 create index idx_interactions_workspace_id on email_interactions(workspace_id);
 create index idx_interactions_prospect_id on email_interactions(prospect_id);
 ```
+
+> **Migration note (2026-07-05):** `actioned_at` was added after the table already
+> existed in production, via `add_actioned_at_to_email_interactions`. RLS policy
+> `interactions_all` already covers it (column-level, not policy-level), so no
+> policy change was needed.
 
 ---
 

@@ -1,113 +1,61 @@
-"use client";
+import { cookies } from "next/headers";
+import { redirect } from "next/navigation";
+import { createServerClient } from "@supabase/auth-helpers-nextjs";
+import { AppContextProvider, type DashboardApp } from "@/components/dashboard/AppContext";
+import { DashboardShell } from "@/components/dashboard/DashboardShell";
+import { supabaseAdmin } from "@/lib/supabase-server";
 
-import { useEffect, useState } from "react";
-import Link from "next/link";
-import { usePathname, useRouter } from "next/navigation";
-import { AppWindow, LogOut, Menu, Settings, X } from "lucide-react";
-import { supabase } from "@/lib/supabase";
-import { Button, buttonVariants } from "@/components/ui/button";
-import { Separator } from "@/components/ui/separator";
-import { cn } from "@/lib/utils";
-
-const NAV_ITEMS = [
-  { href: "/dashboard/apps", label: "Apps", icon: AppWindow },
-  { href: "/dashboard/settings", label: "Settings", icon: Settings },
-];
-
-export default function DashboardLayout({
+export default async function DashboardLayout({
   children,
 }: {
   children: React.ReactNode;
 }) {
-  const pathname = usePathname();
-  const router = useRouter();
-  const [email, setEmail] = useState<string | null>(null);
-  const [mobileNavOpen, setMobileNavOpen] = useState(false);
+  const cookieStore = await cookies();
+  const supabase = createServerClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+    {
+      cookies: {
+        getAll() {
+          return cookieStore.getAll();
+        },
+        setAll() {
+          // Server Components can't set cookies; middleware handles refresh.
+        },
+      },
+    }
+  );
 
-  useEffect(() => {
-    supabase.auth.getUser().then(({ data }) => {
-      setEmail(data.user?.email ?? null);
-    });
-  }, []);
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
 
-  async function handleSignOut() {
-    await supabase.auth.signOut();
-    router.push("/auth/login");
+  if (!user) {
+    redirect("/auth/login");
+  }
+
+  const { data: membership } = await supabaseAdmin
+    .from("workspace_members")
+    .select("workspace_id")
+    .eq("user_id", user.id)
+    .single();
+
+  const workspaceId = membership?.workspace_id as string | undefined;
+
+  let apps: DashboardApp[] = [];
+  if (workspaceId) {
+    const { data } = await supabaseAdmin
+      .from("apps")
+      .select("id, name, source_url, status")
+      .eq("workspace_id", workspaceId)
+      .is("deleted_at", null)
+      .order("created_at", { ascending: false });
+    apps = data ?? [];
   }
 
   return (
-    <div className="flex min-h-screen flex-col md:flex-row">
-      {/* Mobile top bar */}
-      <div className="flex items-center justify-between border-b bg-card px-4 py-3 md:hidden">
-        <span className="font-heading text-base font-semibold">
-          Marketing Agent
-        </span>
-        <Button
-          type="button"
-          variant="ghost"
-          size="icon"
-          aria-label={mobileNavOpen ? "Close menu" : "Open menu"}
-          onClick={() => setMobileNavOpen((open) => !open)}
-        >
-          {mobileNavOpen ? <X /> : <Menu />}
-        </Button>
-      </div>
-
-      {/* Sidebar */}
-      <aside
-        className={cn(
-          "flex-col justify-between border-r bg-card md:flex md:h-screen md:w-[240px] md:shrink-0 md:sticky md:top-0",
-          mobileNavOpen ? "flex" : "hidden"
-        )}
-      >
-        <div className="flex flex-col gap-4 p-4">
-          <span className="hidden font-heading text-base font-semibold md:block">
-            Marketing Agent
-          </span>
-
-          <nav className="flex flex-col gap-1">
-            {NAV_ITEMS.map((item) => {
-              const isActive = pathname.startsWith(item.href);
-              const Icon = item.icon;
-              return (
-                <Link
-                  key={item.href}
-                  href={item.href}
-                  onClick={() => setMobileNavOpen(false)}
-                  className={cn(
-                    buttonVariants({
-                      variant: isActive ? "secondary" : "ghost",
-                    }),
-                    "justify-start"
-                  )}
-                >
-                  <Icon />
-                  {item.label}
-                </Link>
-              );
-            })}
-          </nav>
-        </div>
-
-        <div className="flex flex-col gap-3 p-4">
-          <Separator />
-          <p className="truncate text-sm text-muted-foreground">
-            {email ?? "Loading..."}
-          </p>
-          <Button
-            type="button"
-            variant="outline"
-            className="w-full justify-start"
-            onClick={handleSignOut}
-          >
-            <LogOut />
-            Sign out
-          </Button>
-        </div>
-      </aside>
-
-      {/* Main content */}
-      <main className="flex-1 p-6">{children}</main>
-    </div>
+    <AppContextProvider apps={apps}>
+      <DashboardShell userEmail={user.email ?? null}>{children}</DashboardShell>
+    </AppContextProvider>
   );
 }

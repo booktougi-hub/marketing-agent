@@ -1,23 +1,9 @@
 import { cookies } from "next/headers";
 import { notFound, redirect } from "next/navigation";
 import { createServerClient } from "@supabase/auth-helpers-nextjs";
-import { Loader2 } from "lucide-react";
-import { Badge } from "@/components/ui/badge";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { AppDetailView } from "@/components/apps/app-detail-view";
 import { supabaseAdmin } from "@/lib/supabase-server";
-import type { AppStatus } from "@/types";
-
-const LOADING_STATUSES = new Set<AppStatus>(["extracting", "strategy_pending"]);
-
-const STATUS_LABELS: Record<AppStatus, string> = {
-  pending: "Pending",
-  extracting: "Extracting app DNA...",
-  strategy_pending: "Generating marketing strategy...",
-  awaiting_approval: "Awaiting your approval",
-  active: "Active",
-  paused: "Paused",
-  error: "Error",
-};
+import type { AppDna, AppStatus, StrategyContentPillar, StrategyPersona } from "@/types";
 
 export default async function AppDetailPage({
   params,
@@ -64,7 +50,7 @@ export default async function AppDetailPage({
 
   const { data: app } = await supabaseAdmin
     .from("apps")
-    .select("id, name, source_url, status")
+    .select("id, name, source_url, status, dna")
     .eq("id", id)
     .eq("workspace_id", workspaceId)
     .single();
@@ -74,29 +60,38 @@ export default async function AppDetailPage({
   }
 
   const status = app.status as AppStatus;
-  const isLoading = LOADING_STATUSES.has(status);
+
+  let strategy: {
+    id: string;
+    personas: StrategyPersona[];
+    content_pillars: StrategyContentPillar[];
+    tone: string;
+    channels: string[];
+  } | null = null;
+
+  if (status === "awaiting_approval" || status === "active") {
+    const { data } = await supabaseAdmin
+      .from("strategies")
+      .select("id, personas, content_pillars, tone, channels")
+      .eq("app_id", app.id)
+      .eq("workspace_id", workspaceId)
+      .in("status", ["draft", "active"])
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    strategy = data;
+  }
 
   return (
-    <div className="flex flex-col gap-6">
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-xl">{app.name || app.source_url}</CardTitle>
-        </CardHeader>
-        <CardContent className="flex flex-col items-center gap-3 py-10 text-center">
-          {isLoading ? (
-            <>
-              <Loader2 className="size-6 animate-spin text-muted-foreground" />
-              <p className="text-sm text-muted-foreground">
-                {STATUS_LABELS[status]}
-              </p>
-            </>
-          ) : (
-            <Badge variant={status === "error" ? "destructive" : "secondary"}>
-              {STATUS_LABELS[status]}
-            </Badge>
-          )}
-        </CardContent>
-      </Card>
-    </div>
+    <AppDetailView
+      appId={app.id}
+      workspaceId={workspaceId}
+      initialName={app.name}
+      sourceUrl={app.source_url}
+      initialStatus={status}
+      initialDna={app.dna as AppDna | null}
+      initialStrategy={strategy}
+    />
   );
 }

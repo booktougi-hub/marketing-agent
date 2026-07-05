@@ -4,9 +4,7 @@ import { z } from "zod";
 import { supabaseAdmin } from "@/lib/supabase-server";
 import type { AppDna } from "@/types";
 
-const CLAUDE_MODEL = "claude-sonnet-4-20250514";
-
-const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY! });
+const CLAUDE_MODEL = "claude-sonnet-5";
 
 const payloadSchema = z.object({
   app_id: z.string(),
@@ -58,6 +56,8 @@ export const strategyGeneration = schemaTask({
     const { app_id, workspace_id } = payload;
 
     try {
+      const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY! });
+
       const { data: app, error: appError } = await supabaseAdmin
         .from("apps")
         .select("dna, additional_context")
