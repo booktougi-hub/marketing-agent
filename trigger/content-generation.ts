@@ -1,12 +1,23 @@
 import { logger, schemaTask } from "@trigger.dev/sdk";
 import OpenAI from "openai";
+import Anthropic from "@anthropic-ai/sdk";
 import { z } from "zod";
 import { supabaseAdmin } from "@/lib/supabase-server";
+import { buildDevtoSystemPrompt, buildRealLinksBlock } from "@/lib/devto-article";
+import type { AppDna, StrategyContentPillar } from "@/types";
 
 // Routes across whichever free-tier models currently have capacity, instead
 // of pinning to one popular model (meta-llama/llama-3.3-70b-instruct:free)
 // that gets rate-limited under free-tier load.
 const OPENROUTER_MODEL = "openrouter/free";
+
+// Devto articles use Claude, not the free OpenRouter tier the short-form
+// posts below use — long-form structured Markdown (headers, tables, cited
+// links, varied prose) is exactly the harder formatting task the free tier
+// struggles with, and article volume is low enough that the cost is small.
+const CLAUDE_MODEL = "claude-sonnet-5";
+const DEVTO_MAX_TOKENS = 2048;
+const DEVTO_ARTICLE_COUNT = 2;
 
 const TWITTER_POST_COUNT = 15;
 const LINKEDIN_POST_COUNT = 8;
@@ -61,6 +72,16 @@ Respond with ONLY a JSON object matching this exact shape — no prose, no markd
 Return exactly ${count} posts.`;
 }
 
+// LinkedIn posts run 3-6 paragraphs each and "openrouter/free" can route to
+// reasoning models that spend a chunk of the token budget on hidden
+// reasoning before the actual answer — 4096 was getting exhausted mid-string
+// for the (longer, 8-post) LinkedIn batch. Twitter posts are short enough
+// that the original budget is fine.
+const MAX_TOKENS_BY_PLATFORM: Record<"twitter" | "linkedin", number> = {
+  twitter: 4096,
+  linkedin: 8192,
+};
+
 async function generatePosts(
   openrouter: OpenAI,
   platform: "twitter" | "linkedin",
@@ -71,13 +92,14 @@ async function generatePosts(
 
   const completion = await openrouter.chat.completions.create({
     model: OPENROUTER_MODEL,
-    max_tokens: 4096,
+    max_tokens: MAX_TOKENS_BY_PLATFORM[platform],
     messages: [
       { role: "system", content: buildSystemPrompt(platform, count) },
       { role: "user", content: contextBlock },
     ],
   });
 
+  const finishReason = completion.choices[0]?.finish_reason;
   let responseText = completion.choices[0]?.message?.content ?? "";
   responseText = responseText
     .trim()
@@ -88,8 +110,15 @@ async function generatePosts(
   try {
     parsed = generatedPostsSchema.parse(JSON.parse(responseText));
   } catch (err) {
+    logger.error(`content-generation: failed to parse ${platform} response`, {
+      finish_reason: finishReason,
+      raw_response: responseText.slice(0, 2000),
+      error: err instanceof Error ? err.message : String(err),
+    });
+    const truncationHint =
+      finishReason === "length" ? " (response was truncated — hit the token limit)" : "";
     throw new Error(
-      `${platform} generation returned unparseable output: ${err instanceof Error ? err.message : String(err)}`
+      `${platform} generation returned unparseable output${truncationHint}: ${err instanceof Error ? err.message : String(err)}`
     );
   }
 
@@ -98,6 +127,78 @@ async function generatePosts(
   });
 
   return parsed.posts;
+}
+
+// Devto articles aren't seeded from a research finding the way the
+// from-research route's are — the "specific real detail" they need to cite
+// comes from the app's own DNA and founder-provided additional_context
+// instead. One content pillar becomes one article's angle.
+function buildDevtoUserPrompt(
+  dna: AppDna,
+  additionalContext: string | null,
+  pillar: StrategyContentPillar,
+  realLinks: (string | null | undefined)[]
+): string {
+  const dnaBlock = `=== PRODUCT DNA ===\n${JSON.stringify(dna, null, 2)}`;
+  const contextBlock = additionalContext
+    ? `\n\n=== ADDITIONAL CONTEXT FROM THE FOUNDER ===\n${additionalContext}`
+    : "";
+  const pillarBlock = `=== CONTENT PILLAR ===\n${JSON.stringify(pillar, null, 2)}`;
+  const linksBlock = buildRealLinksBlock(realLinks);
+
+  return `${dnaBlock}${contextBlock}\n\n${pillarBlock}\n\n${linksBlock}\n\nWrite the article around this content pillar's theme — pick one of its example topics as the specific angle. The hook must cite a specific, real detail from the product DNA or additional context above (an exact feature, an exact tagline phrase, a specific fact) — not a generic paraphrase.`;
+}
+
+async function generateDevtoArticles(
+  anthropic: Anthropic,
+  dna: AppDna,
+  additionalContext: string | null,
+  sourceUrl: string,
+  pillars: StrategyContentPillar[],
+  tone: string | null
+): Promise<{ pillar: string; body: string }[]> {
+  const selectedPillars = pillars.slice(0, DEVTO_ARTICLE_COUNT);
+  if (selectedPillars.length === 0) return [];
+
+  logger.info("content-generation: generating devto articles", {
+    count: selectedPillars.length,
+  });
+
+  const systemPrompt = buildDevtoSystemPrompt({ includeComparisonTable: false, tone });
+  const realLinks = [sourceUrl, ...(dna.additional_urls ?? [])];
+
+  const articles: { pillar: string; body: string }[] = [];
+  // Sequential, same as the twitter/linkedin calls above — this only runs a
+  // couple of times per job, so there's no rate-limit pressure to justify
+  // the added complexity of parallelizing.
+  for (const pillar of selectedPillars) {
+    const message = await anthropic.messages.create({
+      model: CLAUDE_MODEL,
+      max_tokens: DEVTO_MAX_TOKENS,
+      system: systemPrompt,
+      messages: [
+        { role: "user", content: buildDevtoUserPrompt(dna, additionalContext, pillar, realLinks) },
+      ],
+    });
+
+    const body = message.content
+      .filter((block) => block.type === "text")
+      .map((block) => block.text)
+      .join("")
+      .trim()
+      .replace(/^```(?:\w+)?\s*/, "")
+      .replace(/```\s*$/, "")
+      .trim();
+
+    if (!body) {
+      throw new Error(`Devto article generation for pillar "${pillar.name}" returned empty output.`);
+    }
+
+    articles.push({ pillar: pillar.name, body });
+  }
+
+  logger.info("content-generation: devto articles generated", { received: articles.length });
+  return articles;
 }
 
 export const contentGeneration = schemaTask({
@@ -116,10 +217,11 @@ export const contentGeneration = schemaTask({
         // default of 2 retries isn't enough headroom, so give it more.
         maxRetries: 6,
       });
+      const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY! });
 
       const { data: app, error: appError } = await supabaseAdmin
         .from("apps")
-        .select("dna")
+        .select("dna, additional_context, source_url")
         .eq("id", app_id)
         .eq("workspace_id", workspace_id)
         .single();
@@ -168,6 +270,14 @@ ${strategy.tone}`;
         LINKEDIN_POST_COUNT,
         contextBlock
       );
+      const devtoArticles = await generateDevtoArticles(
+        anthropic,
+        app.dna as AppDna,
+        app.additional_context,
+        app.source_url,
+        (strategy.content_pillars ?? []) as StrategyContentPillar[],
+        strategy.tone
+      );
 
       const startDate = new Date();
       startDate.setUTCDate(startDate.getUTCDate() + 1);
@@ -197,6 +307,20 @@ ${strategy.tone}`;
           pillar: post.pillar,
           status: "scheduled" as const,
           scheduled_at: linkedinSchedule[i].toISOString(),
+        })),
+        // Draft, not scheduled — long-form articles are worth a human look
+        // before they go out, unlike the short social posts above. No
+        // publisher job auto-publishes any platform yet, so this is purely
+        // about review workflow, not blocking automation.
+        ...devtoArticles.map((article) => ({
+          app_id,
+          workspace_id,
+          strategy_id: strategy.id,
+          platform: "devto" as const,
+          content_type: "article" as const,
+          body: article.body,
+          pillar: article.pillar,
+          status: "draft" as const,
         })),
       ];
 

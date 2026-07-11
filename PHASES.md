@@ -9,7 +9,7 @@
 ## Current Phase: V1 — MVP Core Loop
 
 **Started:** [fill in date]  
-**Target completion:** 5 weeks from start  
+**Target completion:** 6 weeks from start  
 **Status:** 🔴 Not started
 
 ### V1 Success Condition
@@ -120,7 +120,56 @@ Before moving to V2, ALL of the following must be true:
 
 ---
 
-### Week 3 — Content and Publishing
+### Week 3 — Research and Opportunities
+
+*(Re-prioritized 2026-07-08 — see Notes Log. The Research and Opportunities*
+*pages, their API routes, and the rate-limited manual-trigger system already*
+*exist; the one piece still missing is the four Trigger.dev jobs those pages*
+*call. `PATCH /api/apps/[id]/approve` and `POST /api/apps/[id]/research/trigger`*
+*already call `topic-research` and `problem-discovery` — those calls have been*
+*failing silently because the jobs don't exist yet.)*
+
+**Day 1 — Topic Research Job**
+- [ ] Build `/trigger/topic-research.ts`
+  - Input: `{ app_id, workspace_id, triggered_manually: boolean }`
+  - Find trending topics relevant to the app's DNA (real sources — Google Trends, Reddit, Twitter/X search)
+  - Call Claude claude-sonnet-5 to score each topic and draft a one-sentence content angle
+  - Save each topic to `research_findings` with `stream = 'topic_research'`, `week_of` set to the current week
+  - Register the task in `/trigger/index.ts`
+
+**Day 2 — Problem Discovery Job**
+- [ ] Build `/trigger/problem-discovery.ts`
+  - Input: `{ app_id, workspace_id, triggered_manually: boolean }`
+  - Find real user complaints/requests relevant to the app's problem space
+  - Call Claude claude-sonnet-5 to extract a problem statement per finding plus a one-line "how your app solves this" using the app's DNA
+  - Save each finding to `research_findings` with `stream = 'problem_discovery'`
+  - Register the task in `/trigger/index.ts`
+
+**Day 3 — Forum Opportunity Finder Job** *(pulled forward from V3)*
+- [ ] Build `/trigger/forum-opportunity-finder.ts`
+  - Input: `{ app_id, workspace_id }`
+  - Scan Reddit, Hacker News, Quora, LinkedIn, and X for threads where the app could genuinely help
+  - Call Claude claude-sonnet-5 to score relevance (High/Medium/Low) and draft a suggested reply
+  - Save each thread to `research_findings` with `stream = 'forum_opportunities'`
+  - Register the task in `/trigger/index.ts`
+
+**Day 4 — Competitor Gap Analysis Job** *(pulled forward from V4)*
+- [ ] Build `/trigger/competitor-gap-analysis.ts`
+  - Input: `{ app_id, workspace_id }`
+  - Research the app's competitors (from DNA) for gaps/weaknesses (review sites, changelogs, public complaints)
+  - Call Claude claude-sonnet-5 to summarize each gap and suggest positioning
+  - Save each gap to `research_findings` with `stream = 'competitor_gap'`
+  - Register the task in `/trigger/index.ts`
+
+**Day 5 — Schedule and Verify**
+- [ ] Add weekly scheduled triggers for all four jobs (mirroring `weekly-research-reset.ts`'s cron pattern) so results refresh automatically, not only on approval or manual trigger
+- [ ] Confirm `PATCH /api/apps/[id]/approve` successfully triggers `topic-research` and `problem-discovery` end to end
+- [ ] Confirm `POST /api/apps/[id]/research/trigger` successfully triggers the manual-run jobs end to end
+- [ ] Run the full flow on a real app and confirm results appear in the Research and Opportunities tabs within a few minutes
+
+---
+
+### Week 4 — Content and Publishing
 
 **Day 1-2 — Content Generation Job**
 - [ ] Build `/trigger/content-generation.ts`
@@ -157,7 +206,7 @@ Before moving to V2, ALL of the following must be true:
 
 ---
 
-### Week 4 — Billing and Analytics
+### Week 5 — Billing and Analytics
 
 **Day 1-2 — Stripe Billing**
 - [ ] Create Stripe account, create 2 products: Free and Solo ($29/month)
@@ -190,7 +239,7 @@ Before moving to V2, ALL of the following must be true:
 
 ---
 
-### Week 5 — Testing on Real Apps and Beta Launch
+### Week 6 — Testing on Real Apps and Beta Launch
 
 - [ ] Run full flow on AiSkillsGuard — read the generated DNA, strategy, and posts critically
 - [ ] Run full flow on AppFactory — compare quality
@@ -228,14 +277,11 @@ These features are planned for V2 but are completely out of scope until V1 succe
 - Telegram bot
 - Post-signup nurture email sequence
 - YouTube video pipeline
-- Any Research Intelligence Hub streams
 
 ---
 
 ## V2.5 Scope — DO NOT BUILD UNTIL V2 IS DONE
 
-- Research Hub Stream 1: Topic Research
-- Research Hub Stream 2: Problem Discovery
 - Landing page generator from app DNA
 - Meta Pixel and Google Tag auto-install
 - Small-budget test ad creation (Meta + Google Ads APIs)
@@ -251,7 +297,6 @@ These features are planned for V2 but are completely out of scope until V1 succe
 - Three-step follow-up sequences
 - Telegram approval gate for cold email
 - Research Hub Stream 3: Creator Research
-- Research Hub Stream 4: Forum Opportunity Finder
 - Conversation monitoring on X and LinkedIn (auto-reply opt-in)
 - Conversation monitoring on Reddit, HN, Quora (draft only)
 
@@ -259,7 +304,6 @@ These features are planned for V2 but are completely out of scope until V1 succe
 
 ## V4 Scope — DO NOT BUILD UNTIL V3 IS DONE
 
-- Research Hub Stream 5: Competitor Gap Analysis
 - Revenue attribution funnel (UTM tracking + Stripe tracing)
 - Self-learning weekly optimizer (revenue-weighted)
 - Product Hunt launch package generator
@@ -302,3 +346,4 @@ These features are planned for V2 but are completely out of scope until V1 succe
 | Date | Note |
 |---|---|
 | [date] | Project started |
+| 2026-07-08 | Re-prioritized: Research Hub Stream 1 (Topic Research) and Stream 2 (Problem Discovery) pulled forward from V2.5, Stream 4 (Forum Opportunity Finder / the Opportunities page) pulled forward from V3, and Stream 5 (Competitor Gap Analysis) pulled forward from V4 — all four now built as V1 Week 3, ahead of the Publisher Cron Job and Stripe Billing (now Week 4 and Week 5). Reason: the Research and Opportunities pages, their API routes, and the manual-trigger rate-limiting system were already built UI-first; only the underlying Trigger.dev jobs were missing, so triggers were failing silently with nothing to show for it. Research Hub Stream 3 (Creator Research) stays in V3 — not part of this re-prioritization. |

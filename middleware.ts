@@ -1,5 +1,6 @@
 import { createServerClient } from "@supabase/auth-helpers-nextjs";
 import { NextResponse, type NextRequest } from "next/server";
+import { timed } from "@/lib/perf-log";
 
 const AUTH_ROUTES = ["/auth/login", "/auth/signup"];
 
@@ -31,7 +32,9 @@ export async function middleware(request: NextRequest) {
   // getSession() only reads the cookie and must not be trusted in middleware.
   const {
     data: { user },
-  } = await supabase.auth.getUser();
+  } = await timed(`middleware:getUser ${request.nextUrl.pathname}`, () =>
+    supabase.auth.getUser()
+  );
 
   const { pathname } = request.nextUrl;
   const isProtectedRoute =

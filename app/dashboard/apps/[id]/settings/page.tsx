@@ -4,7 +4,7 @@ import { createServerClient } from "@supabase/auth-helpers-nextjs";
 import { AppSettingsView } from "@/components/apps/app-settings-view";
 import { supabaseAdmin } from "@/lib/supabase-server";
 import { parsePublishingSchedule } from "@/lib/app-settings";
-import type { PlanTier } from "@/types";
+import type { AppStatus, PlanTier } from "@/types";
 
 export default async function AppSettingsPage({
   params,
@@ -49,23 +49,33 @@ export default async function AppSettingsPage({
     notFound();
   }
 
-  const [{ data: app }, { data: workspace }, { data: devtoCredential }] = await Promise.all([
-    supabaseAdmin
-      .from("apps")
-      .select(
-        "id, name, source_url, product_type, additional_context, url_changed_at, reanalysis_credits_used, reanalysis_credits_reset_at, app_settings, is_paused"
-      )
-      .eq("id", id)
-      .eq("workspace_id", workspaceId)
-      .single(),
-    supabaseAdmin.from("workspaces").select("plan_tier").eq("id", workspaceId).single(),
-    supabaseAdmin
-      .from("platform_credentials")
-      .select("is_active")
-      .eq("workspace_id", workspaceId)
-      .eq("platform", "devto")
-      .maybeSingle(),
-  ]);
+  const [{ data: app }, { data: workspace }, { data: devtoCredential }, { data: nextContent }] =
+    await Promise.all([
+      supabaseAdmin
+        .from("apps")
+        .select(
+          "id, name, source_url, product_type, additional_context, url_changed_at, reanalysis_credits_used, reanalysis_credits_reset_at, app_settings, is_paused, status"
+        )
+        .eq("id", id)
+        .eq("workspace_id", workspaceId)
+        .single(),
+      supabaseAdmin.from("workspaces").select("plan_tier").eq("id", workspaceId).single(),
+      supabaseAdmin
+        .from("platform_credentials")
+        .select("is_active")
+        .eq("workspace_id", workspaceId)
+        .eq("platform", "devto")
+        .maybeSingle(),
+      supabaseAdmin
+        .from("content")
+        .select("scheduled_at, platform")
+        .eq("app_id", id)
+        .eq("workspace_id", workspaceId)
+        .eq("status", "scheduled")
+        .order("scheduled_at", { ascending: true })
+        .limit(1)
+        .maybeSingle(),
+    ]);
 
   if (!app) {
     notFound();
@@ -87,6 +97,12 @@ export default async function AppSettingsPage({
       )}
       devtoConnected={!!devtoCredential?.is_active}
       isPaused={app.is_paused}
+      appStatus={app.status as AppStatus}
+      nextScheduledContent={
+        nextContent?.scheduled_at
+          ? { scheduledAt: nextContent.scheduled_at, platform: nextContent.platform }
+          : null
+      }
     />
   );
 }

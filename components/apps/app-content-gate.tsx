@@ -1,11 +1,9 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import Link from "next/link";
-import { useRouter } from "next/navigation";
-import { ArrowRight, Loader2, Plus } from "lucide-react";
+import { Loader2, Plus } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
-import { Button, buttonVariants } from "@/components/ui/button";
+import { Button } from "@/components/ui/button";
 import {
   Card,
   CardContent,
@@ -17,6 +15,10 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { supabase } from "@/lib/supabase";
+import {
+  AppContentView,
+  type ContentWithAnalytics,
+} from "@/components/apps/app-content-view";
 import type { AppDna, AppStatus, StrategyContentPillar, StrategyPersona } from "@/types";
 
 function splitLines(value: string): string[] {
@@ -256,10 +258,10 @@ function AddPillarCard({
   );
 }
 
-const LOADING_STATUSES = new Set<AppStatus>(["extracting", "strategy_pending"]);
+const LOADING_STATUSES = new Set<AppStatus>(["pending", "extracting", "strategy_pending"]);
 
 const STATUS_LABELS: Record<AppStatus, string> = {
-  pending: "Pending",
+  pending: "Getting ready...",
   extracting: "Extracting app DNA...",
   strategy_pending: "Generating marketing strategy...",
   awaiting_approval: "Awaiting your approval",
@@ -277,35 +279,34 @@ interface StrategyPreview {
   channels: string[];
 }
 
-export function AppDetailView({
+export function AppContentGate({
   appId,
   workspaceId,
-  initialName,
-  sourceUrl,
   initialStatus,
   initialDna,
   initialStrategy,
+  initialErrorMessage,
+  initialContent,
 }: {
   appId: string;
   workspaceId: string;
-  initialName: string | null;
-  sourceUrl: string;
   initialStatus: AppStatus;
   initialDna: AppDna | null;
   initialStrategy: StrategyPreview | null;
+  initialErrorMessage: string | null;
+  initialContent: ContentWithAnalytics[];
 }) {
-  const [name, setName] = useState(initialName);
   const [status, setStatus] = useState(initialStatus);
   const [dna, setDna] = useState(initialDna);
   const [strategy, setStrategy] = useState(initialStrategy);
+  const [errorMessage, setErrorMessage] = useState(initialErrorMessage);
   const [actionError, setActionError] = useState<string | null>(null);
   const [approving, setApproving] = useState(false);
   const [regenerating, setRegenerating] = useState(false);
-  const router = useRouter();
 
   useEffect(() => {
     const channel = supabase
-      .channel(`app-detail-${appId}`)
+      .channel(`app-content-gate-${appId}`)
       .on(
         "postgres_changes",
         {
@@ -316,13 +317,13 @@ export function AppDetailView({
         },
         async (payload) => {
           const updated = payload.new as {
-            name: string | null;
             status: AppStatus;
             dna: AppDna | null;
+            error_message: string | null;
           };
-          setName(updated.name);
           setStatus(updated.status);
           setDna(updated.dna);
+          setErrorMessage(updated.error_message);
 
           if (updated.status === "awaiting_approval") {
             const { data } = await supabase
@@ -354,9 +355,13 @@ export function AppDetailView({
         const data = (await response.json()) as { error?: string };
         throw new Error(data.error || "Failed to approve strategy.");
       }
-      router.push(`/dashboard/apps/${appId}/content`);
+      // Optimistic: the realtime subscription above will also confirm this,
+      // but flipping immediately avoids a flash of the loading state while
+      // waiting for that event to arrive.
+      setStatus("active");
     } catch (err) {
       setActionError(err instanceof Error ? err.message : "Failed to approve strategy.");
+    } finally {
       setApproving(false);
     }
   }
@@ -423,135 +428,141 @@ export function AppDetailView({
     }
   }
 
-  const isLoading = LOADING_STATUSES.has(status);
-  const showStrategyPreview = status === "awaiting_approval" && !!strategy;
-
-  return (
-    <div className="flex flex-col gap-6">
+  if (LOADING_STATUSES.has(status)) {
+    return (
       <Card>
-        <CardHeader>
-          <CardTitle className="text-xl">{name || sourceUrl}</CardTitle>
-          {dna?.tagline && <CardDescription>{dna.tagline}</CardDescription>}
-        </CardHeader>
-        {!showStrategyPreview && (
-          <CardContent className="flex flex-col items-center gap-3 py-10 text-center">
-            {isLoading ? (
-              <>
-                <Loader2 className="size-6 animate-spin text-muted-foreground" />
-                <p className="text-sm text-muted-foreground">{STATUS_LABELS[status]}</p>
-              </>
-            ) : status === "active" ? (
-              <>
-                <Badge variant="secondary">{STATUS_LABELS[status]}</Badge>
-                <p className="max-w-sm text-sm text-muted-foreground">
-                  Your strategy is approved and content is being generated
-                  automatically.
-                </p>
-                <Link
-                  href={`/dashboard/apps/${appId}/content`}
-                  className={buttonVariants()}
-                >
-                  View Content Calendar
-                  <ArrowRight />
-                </Link>
-              </>
-            ) : (
-              <Badge variant={status === "error" ? "destructive" : "secondary"}>
-                {STATUS_LABELS[status]}
-              </Badge>
+        <CardContent className="flex flex-col items-center gap-3 py-16 text-center">
+          <Loader2 className="size-6 animate-spin text-muted-foreground" />
+          <p className="text-sm text-muted-foreground">{STATUS_LABELS[status]}</p>
+          <p className="max-w-sm text-xs text-muted-foreground">
+            This runs in the background — feel free to explore the other tabs
+            while you wait, we&apos;ll bring you back here automatically.
+          </p>
+        </CardContent>
+      </Card>
+    );
+  }
+
+  if (status === "error") {
+    return (
+      <Card>
+        <CardContent className="flex flex-col items-center gap-3 py-16 text-center">
+          <Badge variant="destructive">{STATUS_LABELS[status]}</Badge>
+          <p className="max-w-sm text-sm text-muted-foreground">
+            {errorMessage || "Something went wrong while setting up this app."}
+          </p>
+        </CardContent>
+      </Card>
+    );
+  }
+
+  if (status === "awaiting_approval" && strategy) {
+    return (
+      <div className="flex flex-col gap-6">
+        <Card>
+          <CardContent className="flex flex-col items-center gap-3 py-6 text-center">
+            <Badge variant="secondary">{STATUS_LABELS[status]}</Badge>
+            <p className="max-w-md text-sm text-muted-foreground">
+              Review the AI-generated strategy below. Approve it to start
+              publishing content automatically, or regenerate for a different
+              take.
+            </p>
+            {dna?.tagline && (
+              <p className="text-sm italic text-muted-foreground">&ldquo;{dna.tagline}&rdquo;</p>
             )}
           </CardContent>
-        )}
-      </Card>
+        </Card>
 
-      {showStrategyPreview && strategy && (
-        <>
-          <Card>
-            <CardHeader>
-              <CardTitle className="text-base">Tone</CardTitle>
-              <CardDescription>{strategy.tone}</CardDescription>
-            </CardHeader>
-          </Card>
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">Tone</CardTitle>
+            <CardDescription>{strategy.tone}</CardDescription>
+          </CardHeader>
+        </Card>
 
-          <div className="flex flex-col gap-3">
-            <h2 className="text-lg font-semibold tracking-tight">Personas</h2>
-            <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
-              {strategy.personas.map((persona, i) => (
-                <Card key={i}>
-                  <CardHeader>
-                    <CardTitle className="text-base">{persona.name}</CardTitle>
-                    <CardDescription>{persona.role}</CardDescription>
-                  </CardHeader>
-                  <CardContent className="flex flex-col gap-3 text-sm">
-                    <div>
-                      <p className="font-medium text-foreground">Pain points</p>
-                      <ul className="list-inside list-disc text-muted-foreground">
-                        {persona.pain_points.map((point, j) => (
-                          <li key={j}>{point}</li>
-                        ))}
-                      </ul>
-                    </div>
-                    <div>
-                      <p className="font-medium text-foreground">Where they hang out</p>
-                      <ul className="list-inside list-disc text-muted-foreground">
-                        {persona.where_they_hang_out.map((place, j) => (
-                          <li key={j}>{place}</li>
-                        ))}
-                      </ul>
-                    </div>
-                  </CardContent>
-                </Card>
-              ))}
-              <AddPersonaCard onAdd={handleAddPersona} />
-            </div>
-          </div>
-
-          <div className="flex flex-col gap-3">
-            <h2 className="text-lg font-semibold tracking-tight">Content Pillars</h2>
-            <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
-              {strategy.content_pillars.map((pillar, i) => (
-                <Card key={i}>
-                  <CardHeader>
-                    <CardTitle className="text-base">{pillar.name}</CardTitle>
-                    <CardDescription>{pillar.description}</CardDescription>
-                  </CardHeader>
-                  <CardContent className="text-sm">
-                    <p className="font-medium text-foreground">Example topics</p>
+        <div className="flex flex-col gap-3">
+          <h2 className="text-lg font-semibold tracking-tight">Personas</h2>
+          <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+            {strategy.personas.map((persona, i) => (
+              <Card key={i}>
+                <CardHeader>
+                  <CardTitle className="text-base">{persona.name}</CardTitle>
+                  <CardDescription>{persona.role}</CardDescription>
+                </CardHeader>
+                <CardContent className="flex flex-col gap-3 text-sm">
+                  <div>
+                    <p className="font-medium text-foreground">Pain points</p>
                     <ul className="list-inside list-disc text-muted-foreground">
-                      {pillar.example_topics.map((topic, j) => (
-                        <li key={j}>{topic}</li>
+                      {persona.pain_points.map((point, j) => (
+                        <li key={j}>{point}</li>
                       ))}
                     </ul>
-                  </CardContent>
-                </Card>
-              ))}
-              <AddPillarCard onAdd={handleAddPillar} />
-            </div>
+                  </div>
+                  <div>
+                    <p className="font-medium text-foreground">Where they hang out</p>
+                    <ul className="list-inside list-disc text-muted-foreground">
+                      {persona.where_they_hang_out.map((place, j) => (
+                        <li key={j}>{place}</li>
+                      ))}
+                    </ul>
+                  </div>
+                </CardContent>
+              </Card>
+            ))}
+            <AddPersonaCard onAdd={handleAddPersona} />
           </div>
+        </div>
 
-          <div className="flex flex-col gap-2">
-            <div className="flex gap-3">
-              <Button onClick={handleApprove} disabled={approving || regenerating}>
-                {approving && <Loader2 className="animate-spin" />}
-                {approving ? "Approving..." : "Approve"}
-              </Button>
-              <Button
-                variant="outline"
-                onClick={handleRegenerate}
-                disabled={approving || regenerating}
-              >
-                {regenerating && <Loader2 className="animate-spin" />}
-                {regenerating ? "Regenerating..." : "Regenerate"}
-              </Button>
-            </div>
-            {actionError && (
-              <p role="alert" className="text-sm text-destructive">
-                {actionError}
-              </p>
-            )}
+        <div className="flex flex-col gap-3">
+          <h2 className="text-lg font-semibold tracking-tight">Content Pillars</h2>
+          <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
+            {strategy.content_pillars.map((pillar, i) => (
+              <Card key={i}>
+                <CardHeader>
+                  <CardTitle className="text-base">{pillar.name}</CardTitle>
+                  <CardDescription>{pillar.description}</CardDescription>
+                </CardHeader>
+                <CardContent className="text-sm">
+                  <p className="font-medium text-foreground">Example topics</p>
+                  <ul className="list-inside list-disc text-muted-foreground">
+                    {pillar.example_topics.map((topic, j) => (
+                      <li key={j}>{topic}</li>
+                    ))}
+                  </ul>
+                </CardContent>
+              </Card>
+            ))}
+            <AddPillarCard onAdd={handleAddPillar} />
           </div>
-        </>
-      )}
-    </div>
-  );
+        </div>
+
+        <div className="flex flex-col gap-2">
+          <div className="flex gap-3">
+            <Button onClick={handleApprove} disabled={approving || regenerating}>
+              {approving && <Loader2 className="animate-spin" />}
+              {approving ? "Approving..." : "Approve"}
+            </Button>
+            <Button
+              variant="outline"
+              onClick={handleRegenerate}
+              disabled={approving || regenerating}
+            >
+              {regenerating && <Loader2 className="animate-spin" />}
+              {regenerating ? "Regenerating..." : "Regenerate"}
+            </Button>
+          </div>
+          {actionError && (
+            <p role="alert" className="text-sm text-destructive">
+              {actionError}
+            </p>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  // active, paused, or awaiting_approval with no draft strategy found yet
+  // (edge case right after a regenerate) — show the content calendar, which
+  // already renders a graceful empty state when there's nothing to show yet.
+  return <AppContentView appId={appId} initialContent={initialContent} />;
 }

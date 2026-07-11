@@ -1,7 +1,9 @@
 // Like lib/opportunity.ts, these shapes describe what `research_findings.findings`
-// (untyped jsonb) is expected to hold for each stream once its research
-// pipeline exists (see PHASES.md V2.5/V4 scope) — every field is parsed
-// defensively since these streams don't run yet.
+// (untyped jsonb) holds for each stream — see the item schemas in
+// trigger/topic-research.ts, trigger/problem-discovery.ts, and
+// trigger/competitor-gap-analysis.ts. Every field is still parsed
+// defensively since it's untyped jsonb, not because the pipelines are
+// hypothetical.
 
 export type TopicSource = "google_trends" | "reddit" | "twitter";
 export type TopicTrend = "up" | "down" | "flat";

@@ -6,6 +6,7 @@ import {
   type OpportunityFinding,
 } from "@/components/apps/app-opportunities-view";
 import { supabaseAdmin } from "@/lib/supabase-server";
+import { timed } from "@/lib/perf-log";
 
 export default async function AppOpportunitiesPage({
   params,
@@ -32,17 +33,19 @@ export default async function AppOpportunitiesPage({
 
   const {
     data: { user },
-  } = await supabase.auth.getUser();
+  } = await timed("opportunities/page:getUser", () => supabase.auth.getUser());
 
   if (!user) {
     redirect("/auth/login");
   }
 
-  const { data: membership } = await supabaseAdmin
-    .from("workspace_members")
-    .select("workspace_id")
-    .eq("user_id", user.id)
-    .single();
+  const { data: membership } = await timed("opportunities/page:workspace_members", () =>
+    supabaseAdmin
+      .from("workspace_members")
+      .select("workspace_id")
+      .eq("user_id", user.id)
+      .single()
+  );
 
   const workspaceId = membership?.workspace_id as string | undefined;
 
@@ -50,24 +53,28 @@ export default async function AppOpportunitiesPage({
     notFound();
   }
 
-  const { data: app } = await supabaseAdmin
-    .from("apps")
-    .select("id, name, source_url")
-    .eq("id", id)
-    .eq("workspace_id", workspaceId)
-    .single();
+  const { data: app } = await timed("opportunities/page:app_row", () =>
+    supabaseAdmin
+      .from("apps")
+      .select("id, name, source_url")
+      .eq("id", id)
+      .eq("workspace_id", workspaceId)
+      .single()
+  );
 
   if (!app) {
     notFound();
   }
 
-  const { data: findingRows } = await supabaseAdmin
-    .from("research_findings")
-    .select("id, findings, status, created_at")
-    .eq("app_id", id)
-    .eq("workspace_id", workspaceId)
-    .eq("stream", "forum_opportunities")
-    .order("created_at", { ascending: false });
+  const { data: findingRows } = await timed("opportunities/page:research_findings", () =>
+    supabaseAdmin
+      .from("research_findings")
+      .select("id, findings, status, created_at")
+      .eq("app_id", id)
+      .eq("workspace_id", workspaceId)
+      .eq("stream", "forum_opportunities")
+      .order("created_at", { ascending: false })
+  );
 
   const findings: OpportunityFinding[] = findingRows ?? [];
 

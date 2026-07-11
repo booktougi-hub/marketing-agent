@@ -79,6 +79,7 @@ export interface App {
   source_url: string;
   product_type: ProductType;
   dna: AppDna | null;
+  icon_url: string | null;
   status: AppStatus;
   is_paused: boolean;
   error_message: string | null;
@@ -89,6 +90,11 @@ export interface App {
   url_changed_at: string | null;
   deleted_at: string | null;
   app_settings: AppSettings;
+  manual_research_count_this_week: number;
+  manual_research_reset_at: string | null;
+  last_manual_research_at: string | null;
+  first_research_completed: boolean;
+  first_research_completed_at: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -165,6 +171,7 @@ export interface Content {
   external_post_id: string | null;
   retry_count: number;
   error_message: string | null;
+  source_research_finding_id: string | null;
   created_at: string;
 }
 
@@ -301,6 +308,20 @@ export interface ResearchFinding {
   findings: unknown;
   status: ResearchStatus;
   week_of: string | null;
+  created_at: string;
+}
+
+// ---------------------------------------------------------------------------
+// forum_search_seeds
+// ---------------------------------------------------------------------------
+
+export interface ForumSearchSeed {
+  id: string;
+  workspace_id: string;
+  app_id: string;
+  keyword: string;
+  source_research_finding_id: string | null;
+  consumed_at: string | null;
   created_at: string;
 }
 

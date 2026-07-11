@@ -5,11 +5,12 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { AppIdentitySection } from "@/components/apps/app-identity-section";
 import { PublishingScheduleSection } from "@/components/apps/publishing-schedule-section";
+import { ResearchScheduleSection } from "@/components/apps/research-schedule-section";
 import { ConnectedPlatformsSection } from "@/components/apps/connected-platforms-section";
 import { DangerZoneSection } from "@/components/apps/danger-zone-section";
 import { cn } from "@/lib/utils";
 import type { PublishingScheduleSettings } from "@/lib/app-settings";
-import type { PlanTier, ProductType } from "@/types";
+import type { AppStatus, ContentPlatform, PlanTier, ProductType } from "@/types";
 
 interface SettingsSection {
   id: string;
@@ -78,6 +79,8 @@ export function AppSettingsView({
   publishingSchedule,
   devtoConnected,
   isPaused,
+  appStatus,
+  nextScheduledContent,
 }: {
   appId: string;
   appName: string | null;
@@ -91,6 +94,8 @@ export function AppSettingsView({
   publishingSchedule: PublishingScheduleSettings;
   devtoConnected: boolean;
   isPaused: boolean;
+  appStatus: AppStatus;
+  nextScheduledContent: { scheduledAt: string; platform: ContentPlatform } | null;
 }) {
   const [activeSection, setActiveSection] = useState(SECTIONS[0].id);
   const navRef = useRef<HTMLDivElement | null>(null);
@@ -170,6 +175,11 @@ export function AppSettingsView({
                 />
               ) : section.id === "publishing-schedule" ? (
                 <PublishingScheduleSection appId={appId} initialSchedule={publishingSchedule} />
+              ) : section.id === "research-schedule" ? (
+                <ResearchScheduleSection
+                  appStatus={appStatus}
+                  nextScheduledContent={nextScheduledContent}
+                />
               ) : section.id === "connected-platforms" ? (
                 <ConnectedPlatformsSection appId={appId} initialDevtoConnected={devtoConnected} />
               ) : section.id === "danger-zone" ? (

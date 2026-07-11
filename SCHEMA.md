@@ -94,6 +94,7 @@ create table apps (
   source_url      text not null,                 -- the URL the user pasted
   product_type    text default 'other',          -- 'developer_tool' | 'mobile_app' | 'web_app' | 'saas' | 'browser_extension' | 'other'
   dna             jsonb,                         -- extracted DNA object (see DNA schema below)
+  icon_url        text,                          -- app's favicon/logo, resolved during DNA extraction; null falls back to a first-letter avatar in the UI
   status          text not null default 'pending',
   -- status values: 'pending' | 'extracting' | 'strategy_pending' | 'awaiting_approval' | 'active' | 'paused' | 'error' | 'deleted'
   is_paused       boolean not null default false,
@@ -105,6 +106,11 @@ create table apps (
   url_changed_at  timestamp with time zone,      -- set when the user edits source_url after initial DNA extraction
   deleted_at      timestamp with time zone,      -- soft delete — set instead of removing the row; excluded by RLS (see policy below)
   app_settings    jsonb default '{}'::jsonb,     -- scheduling and notification preferences (settings screen)
+  manual_research_count_this_week integer default 0,   -- manual research triggers used this week, rate-limited per plan
+  manual_research_reset_at        timestamp with time zone,  -- when manual_research_count_this_week resets to 0
+  last_manual_research_at         timestamp with time zone,  -- timestamp of the most recent manual research trigger
+  first_research_completed        boolean default false,     -- true once the app's first research run (any stream) has been triggered
+  first_research_completed_at     timestamp with time zone,  -- when first_research_completed was set true, for display copy ("completed on [date]")
   created_at      timestamp with time zone default now(),
   updated_at      timestamp with time zone default now()
 );
@@ -132,6 +138,26 @@ create index idx_apps_status on apps(status);
 > excludes soft-deleted apps — no application code changes required for that part.
 > `additional_context`, `doc_paths`, `product_type`, and `is_paused` already existed
 > before this change; they're listed above in their original positions.
+
+> **Migration note (2026-07-07):** `manual_research_count_this_week`, `manual_research_reset_at`,
+> `last_manual_research_at`, and `first_research_completed` were added via
+> `add_manual_research_rate_limit_columns_to_apps`, in preparation for rate-limited
+> manual research triggers. No RLS change needed — `apps_all` already covers new
+> columns on the same row.
+>
+> `first_research_completed_at` was added later the same day, via
+> `add_first_research_completed_at_to_apps`, once the Research page needed a real
+> date for "your first research scan completed on [date]" — `first_research_completed`
+> alone is just a boolean gate with no timestamp. Set in `/api/apps/[id]/approve`
+> alongside `first_research_completed = true`.
+>
+> **Migration note (2026-07-11):** `icon_url` was added via `add_icon_url_to_apps`.
+> Populated by `/trigger/dna-extraction.ts`, which resolves the site's actual
+> favicon/apple-touch-icon/`og:image` (in that preference order) during DNA
+> extraction — see `lib/favicon.ts`. Every candidate URL is verified reachable
+> (HTTP 200 + an `image/*` content type) before being saved, so the column is
+> either a real, loadable image or null; the UI's `AppIcon` component falls back
+> to a first-letter avatar either way (null, or an image that later 404s).
 
 **DNA JSON structure (saved in `dna` column):**
 ```json
@@ -228,6 +254,7 @@ create table content (
   external_post_id text,           -- ID returned by PostEverywhere after publishing
   retry_count     integer default 0,
   error_message   text,
+  source_research_finding_id uuid references research_findings(id) on delete set null,  -- set when this post was created from a research finding (Topics/Problems/Competitors "use this" actions)
   created_at      timestamp with time zone default now()
 );
 
@@ -246,7 +273,16 @@ create index idx_content_app_id on content(app_id);
 create index idx_content_status on content(status);
 create index idx_content_scheduled_at on content(scheduled_at);
 create index idx_content_platform on content(platform);
+create index idx_content_source_research_finding_id on content(source_research_finding_id);
 ```
+
+> **Migration note (2026-07-11):** `source_research_finding_id` was added via
+> `add_source_research_finding_id_to_content`, for `POST /api/apps/[id]/content/from-research`
+> — the shared action behind the Research page's "Use This Topic" / "Use In Next Post"
+> buttons — so a generated draft can be traced back to the finding that produced it.
+> Nullable and `on delete set null` since ordinary content-generation posts (the bulk
+> weekly batch) have no source finding. `content_all` RLS already covers it — same
+> row, no policy change needed.
 
 ---
 
@@ -448,6 +484,38 @@ create policy "research_all" on research_findings
 create index idx_research_workspace_id on research_findings(workspace_id);
 create index idx_research_app_id on research_findings(app_id);
 create index idx_research_stream on research_findings(stream);
+```
+
+---
+
+## Table: forum_search_seeds
+
+Keywords seeded from Problem Discovery and Competitor Gap findings via the Research page's "Search Forums For This" action. Read by the Forum Opportunity Finder job on its next run, alongside its normal DNA-derived keywords, then marked consumed — Reddit/forum content must always be a reply to a thread that job finds, never a standalone drafted post, so this table only ever influences search input, never content generation directly.
+
+```sql
+create table forum_search_seeds (
+  id              uuid primary key default uuid_generate_v4(),
+  workspace_id    uuid references workspaces(id) on delete cascade not null,
+  app_id          uuid references apps(id) on delete cascade not null,
+  keyword         text not null,
+  source_research_finding_id uuid references research_findings(id) on delete set null,
+  consumed_at     timestamp with time zone,  -- set once a Forum Opportunity Finder run has read this seed
+  created_at      timestamp with time zone default now()
+);
+
+alter table forum_search_seeds enable row level security;
+
+create policy "forum_search_seeds_all" on forum_search_seeds
+  for all using (
+    workspace_id in (
+      select workspace_id from workspace_members
+      where user_id = auth.uid()
+    )
+  );
+
+create index idx_forum_search_seeds_app_id on forum_search_seeds(app_id);
+create index idx_forum_search_seeds_workspace_id on forum_search_seeds(workspace_id);
+create index idx_forum_search_seeds_consumed_at on forum_search_seeds(consumed_at);
 ```
 
 ---

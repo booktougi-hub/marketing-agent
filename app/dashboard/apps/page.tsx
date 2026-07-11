@@ -6,6 +6,7 @@ import { Plus } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { buttonVariants } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
+import { AppIcon } from "@/components/apps/app-icon";
 import { supabaseAdmin } from "@/lib/supabase-server";
 import type { App, AppStatus } from "@/types";
 
@@ -89,17 +90,26 @@ export default async function AppsPage() {
       ) : (
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
           {apps.map((app) => (
-            <Link key={app.id} href={`/dashboard/apps/${app.id}`}>
+            <Link key={app.id} href={`/dashboard/apps/${app.id}/content`}>
               <Card className="h-full transition-colors hover:bg-muted/50">
                 <CardContent className="flex flex-col gap-2">
-                  <p className="truncate font-medium">
-                    {app.name || app.source_url}
-                  </p>
-                  {app.name && (
-                    <p className="truncate text-xs text-muted-foreground">
-                      {app.source_url}
-                    </p>
-                  )}
+                  <div className="flex items-center gap-3">
+                    <AppIcon
+                      name={app.name || app.source_url}
+                      iconUrl={app.icon_url}
+                      className="h-9 w-9"
+                    />
+                    <div className="min-w-0">
+                      <p className="truncate font-medium">
+                        {app.name || app.source_url}
+                      </p>
+                      {app.name && (
+                        <p className="truncate text-xs text-muted-foreground">
+                          {app.source_url}
+                        </p>
+                      )}
+                    </div>
+                  </div>
                   <Badge
                     variant={app.status === "error" ? "destructive" : "secondary"}
                     className="w-fit"

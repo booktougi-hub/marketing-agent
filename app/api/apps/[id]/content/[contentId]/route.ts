@@ -4,8 +4,11 @@ import { createServerClient } from "@supabase/auth-helpers-nextjs";
 import { z } from "zod";
 import { supabaseAdmin } from "@/lib/supabase-server";
 
+// 5000 was fine when every post was a short social update, but Dev.to
+// articles (content_type 'article') routinely run several thousand
+// characters of Markdown — headers, tables, links included.
 const patchSchema = z.object({
-  body: z.string().trim().min(1, "Post body can't be empty.").max(5000),
+  body: z.string().trim().min(1, "Post body can't be empty.").max(20000),
 });
 
 async function resolveWorkspaceId(cookieStore: Awaited<ReturnType<typeof cookies>>) {
@@ -94,9 +97,9 @@ export async function PATCH(
       );
     }
 
-    if (existing.status !== "scheduled") {
+    if (existing.status !== "scheduled" && existing.status !== "draft") {
       return NextResponse.json(
-        { error: "Only scheduled posts can be edited.", code: "INVALID_STATE" },
+        { error: "Only scheduled or draft posts can be edited.", code: "INVALID_STATE" },
         { status: 422 }
       );
     }
@@ -154,9 +157,9 @@ export async function DELETE(
       );
     }
 
-    if (existing.status !== "scheduled") {
+    if (existing.status !== "scheduled" && existing.status !== "draft") {
       return NextResponse.json(
-        { error: "Only scheduled posts can be deleted.", code: "INVALID_STATE" },
+        { error: "Only scheduled or draft posts can be deleted.", code: "INVALID_STATE" },
         { status: 422 }
       );
     }

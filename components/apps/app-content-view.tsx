@@ -1,8 +1,8 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { Loader2, Pencil, Trash2 } from "lucide-react";
-import { Badge } from "@/components/ui/badge";
+import { useSearchParams } from "next/navigation";
+import { CalendarDays, Loader2, Rows3 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import {
@@ -13,10 +13,14 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
-import { PLATFORM_COLOR_VAR, PLATFORM_LABEL } from "@/lib/platform";
 import type { Content, ContentPlatform } from "@/types";
+import { ContentCalendarView } from "@/components/apps/content-calendar-view";
+import {
+  DraftPostCard,
+  PlannedPostCard,
+  PublishedPostCard,
+} from "@/components/apps/content-post-card";
 
 export interface ContentWithAnalytics extends Content {
   analytics: { impressions: number; clicks: number; likes: number } | null;
@@ -24,7 +28,10 @@ export interface ContentWithAnalytics extends Content {
 
 type DateRangeTab = "week" | "month" | "all";
 type PlatformFilter = "all" | ContentPlatform;
-type ContentSubTab = "planned" | "published";
+type ContentSubTab = "drafts" | "planned" | "published";
+type ViewMode = "list" | "calendar";
+
+const VALID_SUB_TABS = new Set<string>(["drafts", "planned", "published"]);
 
 const DATE_TABS: { value: DateRangeTab; label: string }[] = [
   { value: "week", label: "This Week" },
@@ -32,8 +39,6 @@ const DATE_TABS: { value: DateRangeTab; label: string }[] = [
   { value: "all", label: "All Time" },
 ];
 
-// Dev.to and every filterable platform except youtube, per spec — youtube
-// isn't part of the V1 content pipeline yet.
 const PLATFORM_FILTERS: { value: PlatformFilter; label: string }[] = [
   { value: "all", label: "All" },
   { value: "twitter", label: "Twitter" },
@@ -41,7 +46,10 @@ const PLATFORM_FILTERS: { value: PlatformFilter; label: string }[] = [
   { value: "instagram", label: "Instagram" },
   { value: "facebook", label: "Facebook" },
   { value: "devto", label: "Dev.to" },
+  { value: "youtube", label: "YouTube" },
 ];
+
+const VALID_PLATFORM_FILTERS = new Set<string>(PLATFORM_FILTERS.map((f) => f.value));
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -61,30 +69,6 @@ function withinRange(
   return direction === "future" ? date <= now + windowMs : date >= now - windowMs;
 }
 
-function formatDateTime(value: string | null) {
-  if (!value) return null;
-  return new Date(value).toLocaleString(undefined, {
-    dateStyle: "medium",
-    timeStyle: "short",
-  });
-}
-
-function PlatformBadge({ platform }: { platform: ContentPlatform }) {
-  const colorVar = PLATFORM_COLOR_VAR[platform];
-  return (
-    <Badge
-      variant="outline"
-      className="border-transparent font-medium"
-      style={{
-        backgroundColor: `color-mix(in oklch, ${colorVar} 16%, transparent)`,
-        color: colorVar,
-      }}
-    >
-      {PLATFORM_LABEL[platform]}
-    </Badge>
-  );
-}
-
 function EmptyState({ message }: { message: string }) {
   return (
     <Card>
@@ -102,10 +86,26 @@ export function AppContentView({
   appId: string;
   initialContent: ContentWithAnalytics[];
 }) {
+  const searchParams = useSearchParams();
+  const platformParam = searchParams.get("platform");
+  const initialPlatformFilter: PlatformFilter =
+    platformParam && VALID_PLATFORM_FILTERS.has(platformParam)
+      ? (platformParam as PlatformFilter)
+      : "all";
+  const tabParam = searchParams.get("tab");
+  const initialSubTab: ContentSubTab =
+    tabParam && VALID_SUB_TABS.has(tabParam) ? (tabParam as ContentSubTab) : "planned";
+
   const [content, setContent] = useState(initialContent);
-  const [dateTab, setDateTab] = useState<DateRangeTab>("week");
-  const [platformFilter, setPlatformFilter] = useState<PlatformFilter>("all");
-  const [subTab, setSubTab] = useState<ContentSubTab>("planned");
+  // Arriving via a platform-specific sidebar link (e.g. YouTube) should show
+  // that platform's content regardless of when it's scheduled, not just
+  // what falls in the default "This Week" window.
+  const [dateTab, setDateTab] = useState<DateRangeTab>(
+    initialPlatformFilter === "all" ? "week" : "all"
+  );
+  const [platformFilter, setPlatformFilter] = useState<PlatformFilter>(initialPlatformFilter);
+  const [subTab, setSubTab] = useState<ContentSubTab>(initialSubTab);
+  const [viewMode, setViewMode] = useState<ViewMode>("list");
 
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editingBody, setEditingBody] = useState("");
@@ -123,6 +123,13 @@ export function AppContentView({
       return next;
     });
   }
+
+  const drafts = useMemo(() => {
+    return content
+      .filter((item) => item.status === "draft")
+      .filter((item) => platformFilter === "all" || item.platform === platformFilter)
+      .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+  }, [content, platformFilter]);
 
   const planned = useMemo(() => {
     return content
@@ -147,6 +154,20 @@ export function AppContentView({
         return bTime - aTime;
       });
   }, [content, platformFilter, dateTab]);
+
+  // Calendar view navigates by month on its own, so it ignores the
+  // week/month/all-time tab and only applies the platform + status filters.
+  const calendarPlanned = useMemo(() => {
+    return content
+      .filter((item) => item.status === "scheduled")
+      .filter((item) => platformFilter === "all" || item.platform === platformFilter);
+  }, [content, platformFilter]);
+
+  const calendarPublished = useMemo(() => {
+    return content
+      .filter((item) => item.status === "published")
+      .filter((item) => platformFilter === "all" || item.platform === platformFilter);
+  }, [content, platformFilter]);
 
   function startEdit(item: ContentWithAnalytics) {
     setEditingId(item.id);
@@ -210,25 +231,74 @@ export function AppContentView({
     }
   }
 
+  const editProps = {
+    editingId,
+    editingBody,
+    onEditingBodyChange: setEditingBody,
+    savingId,
+    rowErrors,
+    onStartEdit: startEdit,
+    onCancelEdit: cancelEdit,
+    onSave: saveEdit,
+    onDelete: (item: ContentWithAnalytics) => setDeleteTarget(item),
+  };
+
   return (
     <div className="flex flex-col gap-5">
       <div className="flex flex-col gap-3">
-        <div className="flex w-fit gap-1 rounded-lg bg-muted p-1">
-          {DATE_TABS.map((tab) => (
-            <button
-              key={tab.value}
-              type="button"
-              onClick={() => setDateTab(tab.value)}
-              className={cn(
-                "rounded-md px-3 py-1.5 text-sm font-medium transition-colors",
-                dateTab === tab.value
-                  ? "bg-card text-foreground shadow-sm"
-                  : "text-muted-foreground hover:text-foreground"
-              )}
-            >
-              {tab.label}
-            </button>
-          ))}
+        <div className="flex flex-wrap items-center gap-2">
+          {viewMode === "list" && subTab !== "drafts" && (
+            <div className="flex w-fit gap-1 rounded-lg bg-muted p-1">
+              {DATE_TABS.map((tab) => (
+                <button
+                  key={tab.value}
+                  type="button"
+                  onClick={() => setDateTab(tab.value)}
+                  className={cn(
+                    "rounded-md px-3 py-1.5 text-sm font-medium transition-colors",
+                    dateTab === tab.value
+                      ? "bg-card text-foreground shadow-sm"
+                      : "text-muted-foreground hover:text-foreground"
+                  )}
+                >
+                  {tab.label}
+                </button>
+              ))}
+            </div>
+          )}
+
+          {subTab !== "drafts" && (
+            <div className="ml-auto flex w-fit gap-1 rounded-lg bg-muted p-1">
+              <button
+                type="button"
+                onClick={() => setViewMode("list")}
+                aria-label="List view"
+                className={cn(
+                  "flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm font-medium transition-colors",
+                  viewMode === "list"
+                    ? "bg-card text-foreground shadow-sm"
+                    : "text-muted-foreground hover:text-foreground"
+                )}
+              >
+                <Rows3 className="size-4" />
+                <span className="hidden sm:inline">List</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setViewMode("calendar")}
+                aria-label="Calendar view"
+                className={cn(
+                  "flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm font-medium transition-colors",
+                  viewMode === "calendar"
+                    ? "bg-card text-foreground shadow-sm"
+                    : "text-muted-foreground hover:text-foreground"
+                )}
+              >
+                <CalendarDays className="size-4" />
+                <span className="hidden sm:inline">Calendar</span>
+              </button>
+            </div>
+          )}
         </div>
 
         <div className="flex flex-wrap gap-2">
@@ -253,6 +323,18 @@ export function AppContentView({
       <div className="flex gap-6 border-b">
         <button
           type="button"
+          onClick={() => setSubTab("drafts")}
+          className={cn(
+            "-mb-px border-b-2 px-1 pb-2 text-sm font-medium transition-colors",
+            subTab === "drafts"
+              ? "border-primary text-foreground"
+              : "border-transparent text-muted-foreground hover:text-foreground"
+          )}
+        >
+          Drafts ({drafts.length})
+        </button>
+        <button
+          type="button"
           onClick={() => setSubTab("planned")}
           className={cn(
             "-mb-px border-b-2 px-1 pb-2 text-sm font-medium transition-colors",
@@ -261,7 +343,7 @@ export function AppContentView({
               : "border-transparent text-muted-foreground hover:text-foreground"
           )}
         >
-          Planned ({planned.length})
+          Planned ({viewMode === "calendar" ? calendarPlanned.length : planned.length})
         </button>
         <button
           type="button"
@@ -273,95 +355,66 @@ export function AppContentView({
               : "border-transparent text-muted-foreground hover:text-foreground"
           )}
         >
-          Published ({published.length})
+          Published ({viewMode === "calendar" ? calendarPublished.length : published.length})
         </button>
       </div>
 
-      {subTab === "planned" ? (
+      {subTab === "drafts" ? (
+        drafts.length === 0 ? (
+          <EmptyState message="No drafts yet. Create one from a Research finding — Topics, Problems, or Competitors — or wait for the next research scan." />
+        ) : (
+          <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+            {drafts.map((item) => (
+              <DraftPostCard
+                key={item.id}
+                appId={appId}
+                item={item}
+                isEditing={editingId === item.id}
+                editingBody={editingBody}
+                onEditingBodyChange={setEditingBody}
+                saving={savingId === item.id}
+                error={rowErrors[item.id] ?? null}
+                onStartEdit={() => startEdit(item)}
+                onCancelEdit={cancelEdit}
+                onSave={() => saveEdit(item.id)}
+                onDelete={() => setDeleteTarget(item)}
+              />
+            ))}
+          </div>
+        )
+      ) : viewMode === "calendar" ? (
+        (subTab === "planned" ? calendarPlanned : calendarPublished).length === 0 ? (
+          <EmptyState
+            message={`No ${subTab} posts match these filters.`}
+          />
+        ) : (
+          <ContentCalendarView
+            appId={appId}
+            items={subTab === "planned" ? calendarPlanned : calendarPublished}
+            dateField={subTab === "planned" ? "scheduled_at" : "published_at"}
+            editProps={subTab === "planned" ? editProps : null}
+          />
+        )
+      ) : subTab === "planned" ? (
         planned.length === 0 ? (
           <EmptyState message="No planned posts match these filters." />
         ) : (
           <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
             {planned.map((item) => (
-              <Card key={item.id}>
-                <CardContent className="flex flex-col gap-3">
-                  <div className="flex items-center justify-between gap-2">
-                    <PlatformBadge platform={item.platform} />
-                    {item.pillar && (
-                      <span className="truncate text-xs text-muted-foreground">
-                        {item.pillar}
-                      </span>
-                    )}
-                  </div>
-
-                  <p className="text-xs text-muted-foreground">
-                    {formatDateTime(item.scheduled_at)}
-                  </p>
-
-                  {editingId === item.id ? (
-                    <Textarea
-                      value={editingBody}
-                      onChange={(e) => setEditingBody(e.target.value)}
-                      rows={4}
-                      autoFocus
-                    />
-                  ) : (
-                    <p className="whitespace-pre-wrap text-sm">{item.body}</p>
-                  )}
-
-                  {rowErrors[item.id] && (
-                    <p className="text-xs text-destructive">{rowErrors[item.id]}</p>
-                  )}
-
-                  <div className="flex justify-end gap-2">
-                    {editingId === item.id ? (
-                      <>
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          size="sm"
-                          onClick={cancelEdit}
-                          disabled={savingId === item.id}
-                        >
-                          Cancel
-                        </Button>
-                        <Button
-                          type="button"
-                          size="sm"
-                          onClick={() => saveEdit(item.id)}
-                          disabled={
-                            savingId === item.id || editingBody.trim().length === 0
-                          }
-                        >
-                          {savingId === item.id && <Loader2 className="animate-spin" />}
-                          Save
-                        </Button>
-                      </>
-                    ) : (
-                      <>
-                        <Button
-                          type="button"
-                          variant="outline"
-                          size="sm"
-                          onClick={() => startEdit(item)}
-                        >
-                          <Pencil />
-                          Edit
-                        </Button>
-                        <Button
-                          type="button"
-                          variant="destructive"
-                          size="sm"
-                          onClick={() => setDeleteTarget(item)}
-                        >
-                          <Trash2 />
-                          Delete
-                        </Button>
-                      </>
-                    )}
-                  </div>
-                </CardContent>
-              </Card>
+              <PlannedPostCard
+                key={item.id}
+                appId={appId}
+                item={item}
+                isEditing={editingId === item.id}
+                editingBody={editingBody}
+                onEditingBodyChange={setEditingBody}
+                saving={savingId === item.id}
+                error={rowErrors[item.id] ?? null}
+                onStartEdit={() => startEdit(item)}
+                onCancelEdit={cancelEdit}
+                onSave={() => saveEdit(item.id)}
+                onDelete={() => setDeleteTarget(item)}
+              />
             ))}
           </div>
         )
@@ -370,36 +423,7 @@ export function AppContentView({
       ) : (
         <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
           {published.map((item) => (
-            <Card key={item.id}>
-              <CardContent className="flex flex-col gap-3">
-                <div className="flex items-center justify-between gap-2">
-                  <PlatformBadge platform={item.platform} />
-                  {item.pillar && (
-                    <span className="truncate text-xs text-muted-foreground">
-                      {item.pillar}
-                    </span>
-                  )}
-                </div>
-
-                <p className="text-xs text-muted-foreground">
-                  {formatDateTime(item.published_at)}
-                </p>
-
-                <p className="whitespace-pre-wrap text-sm">{item.body}</p>
-
-                {item.analytics ? (
-                  <div className="flex gap-4 border-t pt-3 text-xs text-muted-foreground">
-                    <span>{item.analytics.impressions.toLocaleString()} impressions</span>
-                    <span>{item.analytics.likes.toLocaleString()} likes</span>
-                    <span>{item.analytics.clicks.toLocaleString()} clicks</span>
-                  </div>
-                ) : (
-                  <p className="border-t pt-3 text-xs text-muted-foreground">
-                    Fetching metrics...
-                  </p>
-                )}
-              </CardContent>
-            </Card>
+            <PublishedPostCard key={item.id} item={item} />
           ))}
         </div>
       )}
@@ -414,8 +438,8 @@ export function AppContentView({
           <DialogHeader>
             <DialogTitle>Delete this post?</DialogTitle>
             <DialogDescription>
-              This scheduled post will be permanently removed from the queue.
-              This can&apos;t be undone.
+              This {deleteTarget?.status === "draft" ? "draft" : "scheduled post"} will be
+              permanently removed. This can&apos;t be undone.
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>

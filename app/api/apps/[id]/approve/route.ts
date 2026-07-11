@@ -4,6 +4,9 @@ import { createServerClient } from "@supabase/auth-helpers-nextjs";
 import { tasks } from "@trigger.dev/sdk";
 import { supabaseAdmin } from "@/lib/supabase-server";
 import type { contentGeneration } from "@/trigger/content-generation";
+import type { topicResearch } from "@/trigger/topic-research";
+import type { problemDiscovery } from "@/trigger/problem-discovery";
+import type { competitorGapAnalysis } from "@/trigger/competitor-gap-analysis";
 
 export async function PATCH(
   request: NextRequest,
@@ -58,7 +61,7 @@ export async function PATCH(
 
     const { data: app } = await supabaseAdmin
       .from("apps")
-      .select("id, status")
+      .select("id, status, first_research_completed")
       .eq("id", id)
       .eq("workspace_id", workspaceId)
       .single();
@@ -118,6 +121,39 @@ export async function PATCH(
         .update({
           status: "error",
           error_message: "Failed to start content generation.",
+        })
+        .eq("id", id)
+        .eq("workspace_id", workspaceId);
+    }
+
+    // Kick off the very first research run automatically so a new app has
+    // findings within minutes instead of waiting for the next scheduled
+    // Sunday scan. Gated by first_research_completed so this never fires
+    // again — not on a later approval after re-analysis, not ever.
+    if (!app.first_research_completed) {
+      try {
+        const researchPayload = {
+          app_id: id,
+          workspace_id: workspaceId,
+          triggered_manually: false,
+        };
+        await Promise.all([
+          tasks.trigger<typeof topicResearch>("topic-research", researchPayload),
+          tasks.trigger<typeof problemDiscovery>("problem-discovery", researchPayload),
+          tasks.trigger<typeof competitorGapAnalysis>("competitor-gap-analysis", {
+            app_id: id,
+            workspace_id: workspaceId,
+          }),
+        ]);
+      } catch (err) {
+        console.error("Failed to trigger initial research run:", err);
+      }
+
+      await supabaseAdmin
+        .from("apps")
+        .update({
+          first_research_completed: true,
+          first_research_completed_at: new Date().toISOString(),
         })
         .eq("id", id)
         .eq("workspace_id", workspaceId);

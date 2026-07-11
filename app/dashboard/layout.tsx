@@ -4,6 +4,7 @@ import { createServerClient } from "@supabase/auth-helpers-nextjs";
 import { AppContextProvider, type DashboardApp } from "@/components/dashboard/AppContext";
 import { DashboardShell } from "@/components/dashboard/DashboardShell";
 import { supabaseAdmin } from "@/lib/supabase-server";
+import { timed } from "@/lib/perf-log";
 
 export default async function DashboardLayout({
   children,
@@ -28,28 +29,32 @@ export default async function DashboardLayout({
 
   const {
     data: { user },
-  } = await supabase.auth.getUser();
+  } = await timed("layout:getUser", () => supabase.auth.getUser());
 
   if (!user) {
     redirect("/auth/login");
   }
 
-  const { data: membership } = await supabaseAdmin
-    .from("workspace_members")
-    .select("workspace_id")
-    .eq("user_id", user.id)
-    .single();
+  const { data: membership } = await timed("layout:workspace_members", () =>
+    supabaseAdmin
+      .from("workspace_members")
+      .select("workspace_id")
+      .eq("user_id", user.id)
+      .single()
+  );
 
   const workspaceId = membership?.workspace_id as string | undefined;
 
   let apps: DashboardApp[] = [];
   if (workspaceId) {
-    const { data } = await supabaseAdmin
-      .from("apps")
-      .select("id, name, source_url, status")
-      .eq("workspace_id", workspaceId)
-      .is("deleted_at", null)
-      .order("created_at", { ascending: false });
+    const { data } = await timed("layout:apps_list", () =>
+      supabaseAdmin
+        .from("apps")
+        .select("id, name, source_url, icon_url, status")
+        .eq("workspace_id", workspaceId)
+        .is("deleted_at", null)
+        .order("created_at", { ascending: false })
+    );
     apps = data ?? [];
   }
 

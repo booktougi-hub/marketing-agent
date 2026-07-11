@@ -5,6 +5,7 @@ import mammoth from "mammoth";
 import { PDFParse } from "pdf-parse";
 import { z } from "zod";
 import { supabaseAdmin } from "@/lib/supabase-server";
+import { resolveAppIconUrl } from "@/lib/favicon";
 import type { strategyGeneration } from "@/trigger/strategy-generation";
 
 const CLAUDE_MODEL = "claude-sonnet-5";
@@ -108,10 +109,11 @@ export const dnaExtraction = schemaTask({
       const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY! });
 
       let scrapedMarkdown = "";
+      let iconUrl: string | null = null;
       logger.info("dna-extraction: scraping URL", { source_url });
       try {
         const scraped = await firecrawl.scrapeUrl(source_url, {
-          formats: ["markdown"],
+          formats: ["markdown", "html"],
         });
         if ("markdown" in scraped && scraped.markdown) {
           scrapedMarkdown = scraped.markdown;
@@ -120,6 +122,22 @@ export const dnaExtraction = schemaTask({
           got_markdown: !!scrapedMarkdown,
           markdown_length: scrapedMarkdown.length,
         });
+
+        // Favicon/logo resolution failing is never fatal to DNA extraction —
+        // worst case the UI falls back to a first-letter avatar.
+        try {
+          iconUrl = await resolveAppIconUrl({
+            html: "html" in scraped ? scraped.html : null,
+            ogImage: "metadata" in scraped ? scraped.metadata?.ogImage : null,
+            sourceUrl: source_url,
+          });
+          logger.info("dna-extraction: icon resolution finished", { found: !!iconUrl, iconUrl });
+        } catch (err) {
+          logger.warn("dna-extraction: icon resolution failed, continuing without an icon", {
+            source_url,
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
       } catch (err) {
         logger.warn("dna-extraction: Firecrawl scrape failed, continuing with other sources", {
           source_url,
@@ -228,7 +246,15 @@ ${docTexts.length > 0 ? `=== SUPPORTING DOCUMENTS ===\n${docTexts.map((text, i) 
 
       await supabaseAdmin
         .from("apps")
-        .update({ name: dna.name, dna, status: "strategy_pending" })
+        .update({
+          name: dna.name,
+          dna,
+          status: "strategy_pending",
+          // Only overwrite icon_url when a new one was actually found this
+          // run — a transient resolution failure on a later re-analysis
+          // shouldn't null out an icon that was already found before.
+          ...(iconUrl ? { icon_url: iconUrl } : {}),
+        })
         .eq("id", app_id)
         .eq("workspace_id", workspace_id);
 

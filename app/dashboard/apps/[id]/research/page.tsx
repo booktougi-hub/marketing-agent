@@ -4,7 +4,7 @@ import { createServerClient } from "@supabase/auth-helpers-nextjs";
 import { AppResearchView } from "@/components/apps/app-research-view";
 import { supabaseAdmin } from "@/lib/supabase-server";
 import { getLatestMonthRows, getLatestWeekRows } from "@/lib/research";
-import type { ResearchFinding } from "@/types";
+import type { ContentPlatform, PlanTier, ResearchFinding } from "@/types";
 
 type FindingRow = Pick<ResearchFinding, "id" | "findings" | "status" | "week_of" | "created_at">;
 
@@ -51,18 +51,23 @@ export default async function AppResearchPage({
     notFound();
   }
 
-  const { data: app } = await supabaseAdmin
-    .from("apps")
-    .select("id, name, source_url")
-    .eq("id", id)
-    .eq("workspace_id", workspaceId)
-    .single();
+  const [{ data: app }, { data: workspace }] = await Promise.all([
+    supabaseAdmin
+      .from("apps")
+      .select(
+        "id, name, source_url, manual_research_count_this_week, manual_research_reset_at, last_manual_research_at, first_research_completed, first_research_completed_at"
+      )
+      .eq("id", id)
+      .eq("workspace_id", workspaceId)
+      .single(),
+    supabaseAdmin.from("workspaces").select("plan_tier").eq("id", workspaceId).single(),
+  ]);
 
   if (!app) {
     notFound();
   }
 
-  const [{ data: topicRows }, { data: problemRows }, { data: competitorRows }] =
+  const [{ data: topicRows }, { data: problemRows }, { data: competitorRows }, { data: draftRows }] =
     await Promise.all([
       supabaseAdmin
         .from("research_findings")
@@ -85,11 +90,28 @@ export default async function AppResearchPage({
         .eq("workspace_id", workspaceId)
         .eq("stream", "competitor_gap")
         .order("created_at", { ascending: false }),
+      supabaseAdmin
+        .from("content")
+        .select("source_research_finding_id, platform")
+        .eq("app_id", id)
+        .eq("workspace_id", workspaceId)
+        .not("source_research_finding_id", "is", null),
     ]);
 
   const topics = getLatestWeekRows((topicRows ?? []) as FindingRow[]);
   const problems = (problemRows ?? []) as FindingRow[];
   const competitors = getLatestMonthRows((competitorRows ?? []) as FindingRow[]);
+
+  // Which platforms already have a draft generated from each finding — lets
+  // the Research page's per-platform draft buttons show "already drafted"
+  // correctly even after a refresh, not just within the current session.
+  const draftedPlatformsByFinding: Record<string, ContentPlatform[]> = {};
+  for (const row of draftRows ?? []) {
+    if (!row.source_research_finding_id) continue;
+    const list = draftedPlatformsByFinding[row.source_research_finding_id];
+    if (list) list.push(row.platform);
+    else draftedPlatformsByFinding[row.source_research_finding_id] = [row.platform];
+  }
 
   return (
     <div className="flex flex-col gap-6">
@@ -105,6 +127,13 @@ export default async function AppResearchPage({
         initialTopics={topics}
         initialProblems={problems}
         initialCompetitors={competitors}
+        initialDraftedPlatforms={draftedPlatformsByFinding}
+        planTier={(workspace?.plan_tier ?? "free") as PlanTier}
+        manualResearchCountThisWeek={app.manual_research_count_this_week}
+        manualResearchResetAt={app.manual_research_reset_at}
+        lastManualResearchAt={app.last_manual_research_at}
+        firstResearchCompleted={app.first_research_completed}
+        firstResearchCompletedAt={app.first_research_completed_at}
       />
     </div>
   );

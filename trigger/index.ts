@@ -1,3 +1,10 @@
 export { dnaExtraction } from "./dna-extraction";
 export { strategyGeneration } from "./strategy-generation";
 export { contentGeneration } from "./content-generation";
+export { weeklyResearchReset } from "./weekly-research-reset";
+export { topicResearch } from "./topic-research";
+export { problemDiscovery } from "./problem-discovery";
+export { forumOpportunityFinder } from "./forum-opportunity-finder";
+export { competitorGapAnalysis } from "./competitor-gap-analysis";
+export { weeklyResearchScan } from "./weekly-research-scan";
+export { monthlyCompetitorScan } from "./monthly-competitor-scan";

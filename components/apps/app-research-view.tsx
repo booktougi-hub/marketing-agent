@@ -1,12 +1,15 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { ExternalLink, Loader2, Minus, TrendingDown, TrendingUp } from "lucide-react";
+import { toast } from "sonner";
+import { ExternalLink, Loader2, Minus, Search, TrendingDown, TrendingUp } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
+import { RunResearchControl } from "@/components/apps/run-research-control";
 import { cn } from "@/lib/utils";
+import { supabase } from "@/lib/supabase";
 import {
   TOPIC_SOURCE_COLOR_VAR,
   TOPIC_SOURCE_LABEL,
@@ -14,9 +17,77 @@ import {
   parseProblem,
   parseTopic,
 } from "@/lib/research";
-import type { ResearchFinding } from "@/types";
+import {
+  UNLIMITED_MANUAL_RESEARCH_PLANS,
+  getCooldownHoursRemaining,
+  getRemainingManualRuns,
+} from "@/lib/manual-research";
+import type { ContentPlatform, PlanTier, ResearchFinding } from "@/types";
 
 type FindingRow = Pick<ResearchFinding, "id" | "findings" | "status" | "week_of" | "created_at">;
+type FindingType = "topic" | "problem" | "competitor_gap";
+type DraftPlatform = "twitter" | "linkedin" | "devto";
+type DraftedPlatformsMap = Record<string, ContentPlatform[]>;
+
+interface ResearchRunState {
+  remaining: number;
+  cooldownHoursRemaining: number;
+  isUnlimited: boolean;
+  triggering: boolean;
+  onRun: () => void;
+}
+
+function ResearchEmptyState({
+  firstResearchCompleted,
+  firstResearchCompletedAt,
+  runState,
+  nextScanLabel = "Sunday night",
+}: {
+  firstResearchCompleted: boolean;
+  firstResearchCompletedAt: string | null;
+  runState: ResearchRunState;
+  nextScanLabel?: string;
+}) {
+  if (!firstResearchCompleted) {
+    return (
+      <Card>
+        <CardContent className="flex flex-col items-center justify-center gap-3 py-16 text-center">
+          <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+          <p className="max-w-md text-sm text-muted-foreground">
+            Your first research scan is running now. This usually takes a few minutes.
+          </p>
+        </CardContent>
+      </Card>
+    );
+  }
+
+  const dateLabel = firstResearchCompletedAt
+    ? new Date(firstResearchCompletedAt).toLocaleDateString("en-US", { dateStyle: "medium" })
+    : null;
+
+  const canRunNow = runState.isUnlimited || runState.remaining > 0;
+
+  return (
+    <Card>
+      <CardContent className="flex flex-col items-center justify-center gap-4 py-16 text-center">
+        <p className="max-w-md text-sm text-muted-foreground">
+          Your first research scan{dateLabel ? ` completed on ${dateLabel}` : " completed"} but
+          found no results yet — this can happen for very new products with limited public
+          discussion. Your next automatic scan runs {nextScanLabel}.
+          {canRunNow && (
+            <>
+              {" "}
+              You have {runState.isUnlimited ? "unlimited" : runState.remaining} manual scan
+              {!runState.isUnlimited && runState.remaining === 1 ? "" : "s"} available this week
+              if you would like to check again sooner.
+            </>
+          )}
+        </p>
+        {canRunNow && <RunResearchControl {...runState} />}
+      </CardContent>
+    </Card>
+  );
+}
 
 type ResearchTab = "topics" | "problems" | "competitors";
 
@@ -32,45 +103,183 @@ const TREND_ICON = {
   flat: Minus,
 } as const;
 
-function EmptyState({ message }: { message: string }) {
+async function createDraftFromFinding({
+  appId,
+  findingId,
+  type,
+  platform,
+}: {
+  appId: string;
+  findingId: string;
+  type: FindingType;
+  platform: DraftPlatform;
+}) {
+  const res = await fetch(`/api/apps/${appId}/content/from-research`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ research_finding_id: findingId, type, platform }),
+  });
+  const json = await res.json().catch(() => null);
+  if (!res.ok) {
+    throw new Error(json?.error ?? "Failed to create draft.");
+  }
+  return json;
+}
+
+// Optimistic local update mirroring what the realtime UPDATE subscription
+// will apply moments later — keeps the card's disabled state instant
+// instead of waiting on the round trip.
+function markActedOn(setter: (updater: (prev: FindingRow[]) => FindingRow[]) => void, id: string) {
+  setter((prev) => prev.map((f) => (f.id === id ? { ...f, status: "acted_on" } : f)));
+}
+
+function draftsUrl(appId: string) {
+  return `/dashboard/apps/${appId}/content?tab=drafts`;
+}
+
+const DRAFT_BUTTONS: { value: DraftPlatform; label: string; draftedLabel: string }[] = [
+  { value: "twitter", label: "Draft Tweet", draftedLabel: "Tweet Drafted — View" },
+  { value: "linkedin", label: "Draft LinkedIn Post", draftedLabel: "LinkedIn Drafted — View" },
+  { value: "devto", label: "Draft Article", draftedLabel: "Article Drafted — View" },
+];
+
+// The three draft-destination buttons shared by every finding card. Each
+// platform tracks its own in-flight/drafted state independently — a single
+// finding can seed a tweet AND a LinkedIn post AND an article, so clicking
+// one must never disable the others.
+function DraftButtonsRow({
+  appId,
+  findingId,
+  type,
+  primaryPlatform,
+  draftedPlatforms,
+  onDrafted,
+  disabled,
+}: {
+  appId: string;
+  findingId: string;
+  type: FindingType;
+  primaryPlatform: DraftPlatform;
+  draftedPlatforms: ContentPlatform[];
+  onDrafted: (platform: DraftPlatform) => void;
+  disabled?: boolean;
+}) {
+  const router = useRouter();
+  const [pendingPlatform, setPendingPlatform] = useState<DraftPlatform | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  async function handleClick(platform: DraftPlatform) {
+    if (draftedPlatforms.includes(platform)) {
+      router.push(draftsUrl(appId));
+      return;
+    }
+    setPendingPlatform(platform);
+    setError(null);
+    try {
+      await createDraftFromFinding({ appId, findingId, type, platform });
+      onDrafted(platform);
+      toast.success("Draft created", {
+        action: { label: "View in Content", onClick: () => router.push(draftsUrl(appId)) },
+      });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Failed to create draft.";
+      setError(message);
+      toast.error(message);
+    } finally {
+      setPendingPlatform(null);
+    }
+  }
+
   return (
-    <Card>
-      <CardContent className="flex flex-col items-center justify-center gap-2 py-16 text-center">
-        <p className="max-w-md text-sm text-muted-foreground">{message}</p>
-      </CardContent>
-    </Card>
+    <div className="flex flex-col gap-2">
+      <div className="flex flex-wrap gap-2">
+        {DRAFT_BUTTONS.map(({ value, label, draftedLabel }) => {
+          const isDrafted = draftedPlatforms.includes(value);
+          const isPending = pendingPlatform === value;
+          return (
+            <Button
+              key={value}
+              type="button"
+              size="sm"
+              variant={isDrafted ? "secondary" : value === primaryPlatform ? "default" : "outline"}
+              disabled={disabled || (pendingPlatform !== null && !isPending)}
+              onClick={() => handleClick(value)}
+            >
+              {isPending && <Loader2 className="animate-spin" />}
+              {isDrafted ? draftedLabel : label}
+            </Button>
+          );
+        })}
+      </div>
+      {error && <p className="text-xs text-destructive">{error}</p>}
+    </div>
   );
 }
 
-function TopicCard({ appId, finding }: { appId: string; finding: FindingRow }) {
-  const router = useRouter();
-  const parsed = parseTopic(finding.findings);
-  const [creating, setCreating] = useState(false);
+// Separate from drafting entirely — this never generates content. It just
+// queues the finding's text as a keyword for the Forum Opportunity Finder's
+// next run, since a Reddit post always has to be a reply to a thread that
+// job actually finds, never a standalone draft.
+function ForumSeedButton({ appId, findingId }: { appId: string; findingId: string }) {
+  const [seeding, setSeeding] = useState(false);
+  const [seeded, setSeeded] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const TrendIcon = parsed.trend ? TREND_ICON[parsed.trend] : null;
 
-  async function handleUseTopic() {
-    if (!parsed.topic) return;
-    setCreating(true);
+  async function handleClick() {
+    setSeeding(true);
     setError(null);
     try {
-      const res = await fetch(`/api/apps/${appId}/content`, {
+      const res = await fetch(`/api/apps/${appId}/research/seed-forum-search`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ topic: parsed.topic, angle: parsed.angle ?? undefined }),
+        body: JSON.stringify({ research_finding_id: findingId }),
       });
       const json = await res.json().catch(() => null);
       if (!res.ok) {
-        setError(json?.error ?? "Failed to create draft post.");
-        setCreating(false);
-        return;
+        throw new Error(json?.error ?? "Failed to queue forum search.");
       }
-      router.push(`/dashboard/apps/${appId}/content`);
-    } catch {
-      setError("Failed to create draft post.");
-      setCreating(false);
+      setSeeded(true);
+      toast.success("Added to the next Forum Opportunity scan");
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Failed to queue forum search.";
+      setError(message);
+      toast.error(message);
+    } finally {
+      setSeeding(false);
     }
   }
+
+  return (
+    <div className="flex flex-col gap-1">
+      <Button
+        type="button"
+        variant="ghost"
+        size="sm"
+        className="w-fit"
+        disabled={seeding || seeded}
+        onClick={handleClick}
+      >
+        {seeding ? <Loader2 className="animate-spin" /> : <Search className="size-3.5" />}
+        {seeded ? "Added to Forum Search" : "Search Forums For This"}
+      </Button>
+      {error && <p className="text-xs text-destructive">{error}</p>}
+    </div>
+  );
+}
+
+function TopicCard({
+  appId,
+  finding,
+  draftedPlatforms,
+  onDrafted,
+}: {
+  appId: string;
+  finding: FindingRow;
+  draftedPlatforms: ContentPlatform[];
+  onDrafted: (platform: DraftPlatform) => void;
+}) {
+  const parsed = parseTopic(finding.findings);
+  const TrendIcon = parsed.trend ? TREND_ICON[parsed.trend] : null;
 
   return (
     <Card>
@@ -108,52 +317,32 @@ function TopicCard({ appId, finding }: { appId: string; finding: FindingRow }) {
 
         {parsed.angle && <p className="text-sm text-muted-foreground">{parsed.angle}</p>}
 
-        <div>
-          <Button
-            type="button"
-            size="sm"
-            disabled={creating || !parsed.topic}
-            onClick={handleUseTopic}
-          >
-            {creating && <Loader2 className="animate-spin" />}
-            Use This Topic
-          </Button>
-        </div>
-
-        {error && <p className="text-xs text-destructive">{error}</p>}
+        <DraftButtonsRow
+          appId={appId}
+          findingId={finding.id}
+          type="topic"
+          primaryPlatform="twitter"
+          draftedPlatforms={draftedPlatforms}
+          onDrafted={onDrafted}
+          disabled={!parsed.topic}
+        />
       </CardContent>
     </Card>
   );
 }
 
-function ProblemCard({ appId, finding }: { appId: string; finding: FindingRow }) {
+function ProblemCard({
+  appId,
+  finding,
+  draftedPlatforms,
+  onDrafted,
+}: {
+  appId: string;
+  finding: FindingRow;
+  draftedPlatforms: ContentPlatform[];
+  onDrafted: (platform: DraftPlatform) => void;
+}) {
   const parsed = parseProblem(finding.findings);
-  const [status, setStatus] = useState(finding.status);
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const isUsed = status === "acted_on";
-
-  async function handleUseInEmail() {
-    setSaving(true);
-    setError(null);
-    try {
-      const res = await fetch(`/api/apps/${appId}/research/${finding.id}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ status: "acted_on" }),
-      });
-      const json = await res.json().catch(() => null);
-      if (!res.ok) {
-        setError(json?.error ?? "Failed to use this problem.");
-        return;
-      }
-      setStatus("acted_on");
-    } catch {
-      setError("Failed to use this problem.");
-    } finally {
-      setSaving(false);
-    }
-  }
 
   return (
     <Card>
@@ -183,60 +372,34 @@ function ProblemCard({ appId, finding }: { appId: string; finding: FindingRow })
           {parsed.appFit ?? "No fit summary yet for how your app solves this."}
         </p>
 
-        <div className="flex items-center gap-2">
-          <Button
-            type="button"
-            variant={isUsed ? "secondary" : "default"}
-            size="sm"
-            disabled={saving || isUsed}
-            onClick={handleUseInEmail}
-          >
-            {saving && <Loader2 className="animate-spin" />}
-            {isUsed ? "Added to next batch" : "Use In Email"}
-          </Button>
-        </div>
+        <DraftButtonsRow
+          appId={appId}
+          findingId={finding.id}
+          type="problem"
+          primaryPlatform="twitter"
+          draftedPlatforms={draftedPlatforms}
+          onDrafted={onDrafted}
+          disabled={!parsed.statement}
+        />
 
-        {error && <p className="text-xs text-destructive">{error}</p>}
+        <ForumSeedButton appId={appId} findingId={finding.id} />
       </CardContent>
     </Card>
   );
 }
 
-function CompetitorGapCard({ appId, finding }: { appId: string; finding: FindingRow }) {
+function CompetitorGapCard({
+  appId,
+  finding,
+  draftedPlatforms,
+  onDrafted,
+}: {
+  appId: string;
+  finding: FindingRow;
+  draftedPlatforms: ContentPlatform[];
+  onDrafted: (platform: DraftPlatform) => void;
+}) {
   const parsed = parseCompetitorGap(finding.findings);
-  const [status, setStatus] = useState(finding.status);
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const isAdded = status === "acted_on";
-
-  async function handleAddToStrategy() {
-    setSaving(true);
-    setError(null);
-    try {
-      const res = await fetch(`/api/apps/${appId}/strategy/pillars`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          findingId: finding.id,
-          pillar: {
-            name: parsed.competitorName ? `${parsed.competitorName} gap` : "Competitor gap",
-            description: parsed.positioning ?? parsed.gap ?? "",
-            example_topics: parsed.gap ? [parsed.gap] : [],
-          },
-        }),
-      });
-      const json = await res.json().catch(() => null);
-      if (!res.ok) {
-        setError(json?.error ?? "Failed to add to strategy.");
-        return;
-      }
-      setStatus("acted_on");
-    } catch {
-      setError("Failed to add to strategy.");
-    } finally {
-      setSaving(false);
-    }
-  }
 
   return (
     <Card>
@@ -257,20 +420,17 @@ function CompetitorGapCard({ appId, finding }: { appId: string; finding: Finding
           </p>
         )}
 
-        <div className="flex items-center gap-2">
-          <Button
-            type="button"
-            variant={isAdded ? "secondary" : "default"}
-            size="sm"
-            disabled={saving || isAdded}
-            onClick={handleAddToStrategy}
-          >
-            {saving && <Loader2 className="animate-spin" />}
-            {isAdded ? "Added to Strategy" : "Add to Strategy"}
-          </Button>
-        </div>
+        <DraftButtonsRow
+          appId={appId}
+          findingId={finding.id}
+          type="competitor_gap"
+          primaryPlatform="devto"
+          draftedPlatforms={draftedPlatforms}
+          onDrafted={onDrafted}
+          disabled={!parsed.gap}
+        />
 
-        {error && <p className="text-xs text-destructive">{error}</p>}
+        <ForumSeedButton appId={appId} findingId={finding.id} />
       </CardContent>
     </Card>
   );
@@ -281,16 +441,164 @@ export function AppResearchView({
   initialTopics,
   initialProblems,
   initialCompetitors,
+  initialDraftedPlatforms,
+  planTier,
+  manualResearchCountThisWeek,
+  manualResearchResetAt,
+  lastManualResearchAt,
+  firstResearchCompleted,
+  firstResearchCompletedAt,
 }: {
   appId: string;
   initialTopics: FindingRow[];
   initialProblems: FindingRow[];
   initialCompetitors: FindingRow[];
+  initialDraftedPlatforms: DraftedPlatformsMap;
+  planTier: PlanTier;
+  manualResearchCountThisWeek: number;
+  manualResearchResetAt: string | null;
+  lastManualResearchAt: string | null;
+  firstResearchCompleted: boolean;
+  firstResearchCompletedAt: string | null;
 }) {
   const [tab, setTab] = useState<ResearchTab>("topics");
+  const [topics, setTopics] = useState(initialTopics);
+  const [problems, setProblems] = useState(initialProblems);
+  const [competitors, setCompetitors] = useState(initialCompetitors);
+  const [draftedPlatforms, setDraftedPlatforms] = useState<DraftedPlatformsMap>(
+    initialDraftedPlatforms
+  );
+
+  const [remaining, setRemaining] = useState(() =>
+    getRemainingManualRuns(planTier, manualResearchCountThisWeek, manualResearchResetAt)
+  );
+  const [cooldownHoursRemaining, setCooldownHoursRemaining] = useState(() =>
+    getCooldownHoursRemaining(lastManualResearchAt)
+  );
+  const [triggering, setTriggering] = useState(false);
+  const isUnlimited = UNLIMITED_MANUAL_RESEARCH_PLANS.has(planTier);
+
+  function handleDrafted(
+    listSetter: (updater: (prev: FindingRow[]) => FindingRow[]) => void,
+    findingId: string,
+    platform: DraftPlatform
+  ) {
+    setDraftedPlatforms((prev) => {
+      const existing = prev[findingId] ?? [];
+      if (existing.includes(platform)) return prev;
+      return { ...prev, [findingId]: [...existing, platform] };
+    });
+    markActedOn(listSetter, findingId);
+  }
+
+  useEffect(() => {
+    const channel = supabase
+      .channel(`research-findings-${appId}`)
+      .on(
+        "postgres_changes",
+        {
+          event: "INSERT",
+          schema: "public",
+          table: "research_findings",
+          filter: `app_id=eq.${appId}`,
+        },
+        (payload) => {
+          const row = payload.new as FindingRow & { stream: string };
+          const entry: FindingRow = {
+            id: row.id,
+            findings: row.findings,
+            status: row.status,
+            week_of: row.week_of,
+            created_at: row.created_at,
+          };
+          const appendUnique = (prev: FindingRow[]) =>
+            prev.some((f) => f.id === entry.id) ? prev : [entry, ...prev];
+
+          if (row.stream === "topic_research") {
+            setTopics(appendUnique);
+          } else if (row.stream === "problem_discovery") {
+            setProblems(appendUnique);
+          } else if (row.stream === "competitor_gap") {
+            setCompetitors(appendUnique);
+          }
+        }
+      )
+      .on(
+        "postgres_changes",
+        {
+          event: "UPDATE",
+          schema: "public",
+          table: "research_findings",
+          filter: `app_id=eq.${appId}`,
+        },
+        (payload) => {
+          const row = payload.new as FindingRow & { stream: string };
+          const applyStatus = (prev: FindingRow[]) =>
+            prev.map((f) => (f.id === row.id ? { ...f, status: row.status } : f));
+
+          if (row.stream === "topic_research") {
+            setTopics(applyStatus);
+          } else if (row.stream === "problem_discovery") {
+            setProblems(applyStatus);
+          } else if (row.stream === "competitor_gap") {
+            setCompetitors(applyStatus);
+          }
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [appId]);
+
+  async function handleRunResearch() {
+    setTriggering(true);
+    try {
+      const res = await fetch(`/api/apps/${appId}/research/trigger`, { method: "POST" });
+      const json = await res.json().catch(() => null);
+      if (!res.ok) {
+        toast.error(json?.error ?? "Failed to start research.");
+        if (typeof json?.retryAfter === "number") {
+          setCooldownHoursRemaining(json.retryAfter);
+        }
+        return;
+      }
+      toast.success("Research started — results will appear in a few minutes");
+      if (typeof json?.remaining === "number") {
+        setRemaining(json.remaining);
+      }
+      setCooldownHoursRemaining(6);
+    } catch {
+      toast.error("Failed to start research.");
+    } finally {
+      setTriggering(false);
+    }
+  }
+
+  const runState: ResearchRunState = {
+    remaining,
+    cooldownHoursRemaining,
+    isUnlimited,
+    triggering,
+    onRun: handleRunResearch,
+  };
 
   return (
     <div className="flex flex-col gap-5">
+      <Card>
+        <CardContent className="flex flex-wrap items-center justify-between gap-4">
+          <div>
+            <p className="text-sm font-semibold">Manual Research</p>
+            <p className="text-xs text-muted-foreground">
+              Run an extra scan for trending topics and user problems outside the weekly
+              schedule.
+            </p>
+          </div>
+          <RunResearchControl {...runState} />
+        </CardContent>
+      </Card>
+
       <div className={cn("flex gap-6 border-b")}>
         {TABS.map((item) => (
           <button
@@ -310,34 +618,65 @@ export function AppResearchView({
       </div>
 
       {tab === "topics" &&
-        (initialTopics.length === 0 ? (
-          <EmptyState message="The research agent hasn't found trending topics for your app yet. Check back once the weekly topic scan runs." />
+        (topics.length === 0 ? (
+          <ResearchEmptyState
+            firstResearchCompleted={firstResearchCompleted}
+            firstResearchCompletedAt={firstResearchCompletedAt}
+            runState={runState}
+          />
         ) : (
           <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-            {initialTopics.map((finding) => (
-              <TopicCard key={finding.id} appId={appId} finding={finding} />
+            {topics.map((finding) => (
+              <TopicCard
+                key={finding.id}
+                appId={appId}
+                finding={finding}
+                draftedPlatforms={draftedPlatforms[finding.id] ?? []}
+                onDrafted={(platform) => handleDrafted(setTopics, finding.id, platform)}
+              />
             ))}
           </div>
         ))}
 
       {tab === "problems" &&
-        (initialProblems.length === 0 ? (
-          <EmptyState message="No user problems discovered yet. This tab fills in as the research agent finds real user complaints and requests." />
+        (problems.length === 0 ? (
+          <ResearchEmptyState
+            firstResearchCompleted={firstResearchCompleted}
+            firstResearchCompletedAt={firstResearchCompletedAt}
+            runState={runState}
+          />
         ) : (
           <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-            {initialProblems.map((finding) => (
-              <ProblemCard key={finding.id} appId={appId} finding={finding} />
+            {problems.map((finding) => (
+              <ProblemCard
+                key={finding.id}
+                appId={appId}
+                finding={finding}
+                draftedPlatforms={draftedPlatforms[finding.id] ?? []}
+                onDrafted={(platform) => handleDrafted(setProblems, finding.id, platform)}
+              />
             ))}
           </div>
         ))}
 
       {tab === "competitors" &&
-        (initialCompetitors.length === 0 ? (
-          <EmptyState message="No competitor gaps found yet. This tab fills in once the monthly competitor analysis runs." />
+        (competitors.length === 0 ? (
+          <ResearchEmptyState
+            firstResearchCompleted={firstResearchCompleted}
+            firstResearchCompletedAt={firstResearchCompletedAt}
+            runState={runState}
+            nextScanLabel="on the 1st of next month"
+          />
         ) : (
           <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-            {initialCompetitors.map((finding) => (
-              <CompetitorGapCard key={finding.id} appId={appId} finding={finding} />
+            {competitors.map((finding) => (
+              <CompetitorGapCard
+                key={finding.id}
+                appId={appId}
+                finding={finding}
+                draftedPlatforms={draftedPlatforms[finding.id] ?? []}
+                onDrafted={(platform) => handleDrafted(setCompetitors, finding.id, platform)}
+              />
             ))}
           </div>
         ))}

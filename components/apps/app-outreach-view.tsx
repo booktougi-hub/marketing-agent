@@ -79,7 +79,9 @@ function prospectDisplayName(prospect: Pick<ColdEmailProspect, "first_name" | "l
 
 function formatDateTime(value: string | null) {
   if (!value) return null;
-  return new Date(value).toLocaleString(undefined, {
+  // Locale pinned to avoid a server/client hydration mismatch (see other
+  // formatDateTime helpers in this codebase for the same fix).
+  return new Date(value).toLocaleString("en-US", {
     dateStyle: "medium",
     timeStyle: "short",
   });

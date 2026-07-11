@@ -3,6 +3,7 @@ import { notFound, redirect } from "next/navigation";
 import { createServerClient } from "@supabase/auth-helpers-nextjs";
 import { AppStrategyView } from "@/components/apps/app-strategy-view";
 import { supabaseAdmin } from "@/lib/supabase-server";
+import { timed } from "@/lib/perf-log";
 import type { AppDna, AppStatus, Strategy } from "@/types";
 
 export default async function AppStrategyPage({
@@ -30,17 +31,19 @@ export default async function AppStrategyPage({
 
   const {
     data: { user },
-  } = await supabase.auth.getUser();
+  } = await timed("strategy/page:getUser", () => supabase.auth.getUser());
 
   if (!user) {
     redirect("/auth/login");
   }
 
-  const { data: membership } = await supabaseAdmin
-    .from("workspace_members")
-    .select("workspace_id")
-    .eq("user_id", user.id)
-    .single();
+  const { data: membership } = await timed("strategy/page:workspace_members", () =>
+    supabaseAdmin
+      .from("workspace_members")
+      .select("workspace_id")
+      .eq("user_id", user.id)
+      .single()
+  );
 
   const workspaceId = membership?.workspace_id as string | undefined;
 
@@ -48,26 +51,30 @@ export default async function AppStrategyPage({
     notFound();
   }
 
-  const { data: app } = await supabaseAdmin
-    .from("apps")
-    .select("id, name, source_url, status, dna")
-    .eq("id", id)
-    .eq("workspace_id", workspaceId)
-    .single();
+  const { data: app } = await timed("strategy/page:app_row", () =>
+    supabaseAdmin
+      .from("apps")
+      .select("id, name, source_url, status, dna")
+      .eq("id", id)
+      .eq("workspace_id", workspaceId)
+      .single()
+  );
 
   if (!app) {
     notFound();
   }
 
-  const { data: strategy } = await supabaseAdmin
-    .from("strategies")
-    .select("*")
-    .eq("app_id", id)
-    .eq("workspace_id", workspaceId)
-    .eq("status", "active")
-    .order("created_at", { ascending: false })
-    .limit(1)
-    .maybeSingle();
+  const { data: strategy } = await timed("strategy/page:active_strategy", () =>
+    supabaseAdmin
+      .from("strategies")
+      .select("*")
+      .eq("app_id", id)
+      .eq("workspace_id", workspaceId)
+      .eq("status", "active")
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle()
+  );
 
   return (
     <div className="flex flex-col gap-6">
