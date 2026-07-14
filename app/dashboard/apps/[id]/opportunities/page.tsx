@@ -7,6 +7,7 @@ import {
 } from "@/components/apps/app-opportunities-view";
 import { supabaseAdmin } from "@/lib/supabase-server";
 import { timed } from "@/lib/perf-log";
+import type { PlanTier, ResearchDay } from "@/types";
 
 export default async function AppOpportunitiesPage({
   params,
@@ -53,14 +54,21 @@ export default async function AppOpportunitiesPage({
     notFound();
   }
 
-  const { data: app } = await timed("opportunities/page:app_row", () =>
-    supabaseAdmin
-      .from("apps")
-      .select("id, name, source_url")
-      .eq("id", id)
-      .eq("workspace_id", workspaceId)
-      .single()
-  );
+  const [{ data: app }, { data: workspace }] = await Promise.all([
+    timed("opportunities/page:app_row", () =>
+      supabaseAdmin
+        .from("apps")
+        .select(
+          "id, name, source_url, agent_credits_used_this_week, agent_credits_reset_at, last_agent_action_at, first_research_completed, first_research_completed_at, preferred_research_day, preferred_research_hour"
+        )
+        .eq("id", id)
+        .eq("workspace_id", workspaceId)
+        .single()
+    ),
+    timed("opportunities/page:workspace", () =>
+      supabaseAdmin.from("workspaces").select("plan_tier").eq("id", workspaceId).single()
+    ),
+  ]);
 
   if (!app) {
     notFound();
@@ -87,7 +95,18 @@ export default async function AppOpportunitiesPage({
         <p className="text-sm text-muted-foreground">Opportunities</p>
       </div>
 
-      <AppOpportunitiesView appId={id} initialFindings={findings} />
+      <AppOpportunitiesView
+        appId={id}
+        initialFindings={findings}
+        planTier={(workspace?.plan_tier ?? "free") as PlanTier}
+        agentCreditsUsedThisWeek={app.agent_credits_used_this_week}
+        agentCreditsResetAt={app.agent_credits_reset_at}
+        lastAgentActionAt={app.last_agent_action_at}
+        firstResearchCompleted={app.first_research_completed}
+        firstResearchCompletedAt={app.first_research_completed_at}
+        preferredResearchDay={app.preferred_research_day as ResearchDay}
+        preferredResearchHour={app.preferred_research_hour}
+      />
     </div>
   );
 }

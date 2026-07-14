@@ -3,6 +3,9 @@ import { NextResponse, type NextRequest } from "next/server";
 import { createServerClient } from "@supabase/auth-helpers-nextjs";
 import { z } from "zod";
 import { supabaseAdmin } from "@/lib/supabase-server";
+import { withErrorHandling } from "@/lib/errors/apiHandler";
+import { ErrorMessages } from "@/lib/errors/messages";
+import { UnauthorizedError, ForbiddenError, NotFoundError, ValidationError, InternalError } from "@/lib/errors/AppError";
 import type { StrategyContentPillar } from "@/types";
 
 const postSchema = z.object({
@@ -16,11 +19,10 @@ const postSchema = z.object({
 
 // Appends a new content pillar to the app's active strategy — used by the
 // Research section's "Add to Strategy" action (competitor gap findings).
-export async function POST(
+export const POST = withErrorHandling(async (
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
-) {
-  try {
+) => {
     const { id } = await params;
 
     const cookieStore = await cookies();
@@ -46,10 +48,7 @@ export async function POST(
     } = await supabase.auth.getUser();
 
     if (!user) {
-      return NextResponse.json(
-        { error: "Unauthorized", code: "UNAUTHENTICATED" },
-        { status: 401 }
-      );
+      throw new UnauthorizedError(ErrorMessages.auth.UNAUTHORIZED);
     }
 
     const { data: membership } = await supabaseAdmin
@@ -61,23 +60,14 @@ export async function POST(
     const workspaceId = membership?.workspace_id as string | undefined;
 
     if (!workspaceId) {
-      return NextResponse.json(
-        { error: "No workspace found for this account.", code: "NO_WORKSPACE" },
-        { status: 403 }
-      );
+      throw new ForbiddenError(ErrorMessages.auth.NO_WORKSPACE, "NO_WORKSPACE");
     }
 
     const json = await request.json().catch(() => null);
     const parsed = postSchema.safeParse(json);
 
     if (!parsed.success) {
-      return NextResponse.json(
-        {
-          error: parsed.error.issues[0]?.message ?? "Invalid request body.",
-          code: "VALIDATION_ERROR",
-        },
-        { status: 422 }
-      );
+      throw new ValidationError(parsed.error.issues[0]?.message ?? ErrorMessages.generic.INVALID_REQUEST_BODY);
     }
 
     const { data: finding } = await supabaseAdmin
@@ -89,10 +79,7 @@ export async function POST(
       .single();
 
     if (!finding) {
-      return NextResponse.json(
-        { error: "Finding not found.", code: "NOT_FOUND" },
-        { status: 404 }
-      );
+      throw new NotFoundError(ErrorMessages.research.FINDING_NOT_FOUND);
     }
 
     const { data: strategy } = await supabaseAdmin
@@ -106,10 +93,7 @@ export async function POST(
       .maybeSingle();
 
     if (!strategy) {
-      return NextResponse.json(
-        { error: "No active strategy found for this app.", code: "NO_STRATEGY" },
-        { status: 422 }
-      );
+      throw new ValidationError(ErrorMessages.strategy.NO_ACTIVE_STRATEGY, "NO_STRATEGY");
     }
 
     const existingPillars = (strategy.content_pillars ?? []) as StrategyContentPillar[];
@@ -124,10 +108,7 @@ export async function POST(
       .single();
 
     if (updateError || !updatedStrategy) {
-      return NextResponse.json(
-        { error: "Failed to update strategy.", code: "SERVER_ERROR" },
-        { status: 500 }
-      );
+      throw new InternalError(ErrorMessages.strategy.UPDATE_FAILED);
     }
 
     await supabaseAdmin
@@ -138,11 +119,4 @@ export async function POST(
       .eq("workspace_id", workspaceId);
 
     return NextResponse.json({ strategy: updatedStrategy }, { status: 200 });
-  } catch (error) {
-    console.error("POST /api/apps/[id]/strategy/pillars error:", error);
-    return NextResponse.json(
-      { error: "Something went wrong. Please try again.", code: "SERVER_ERROR" },
-      { status: 500 }
-    );
-  }
-}
+});

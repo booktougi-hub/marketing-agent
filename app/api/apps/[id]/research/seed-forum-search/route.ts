@@ -4,6 +4,9 @@ import { createServerClient } from "@supabase/auth-helpers-nextjs";
 import { z } from "zod";
 import { supabaseAdmin } from "@/lib/supabase-server";
 import { parseCompetitorGap, parseProblem } from "@/lib/research";
+import { withErrorHandling } from "@/lib/errors/apiHandler";
+import { ErrorMessages } from "@/lib/errors/messages";
+import { UnauthorizedError, ForbiddenError, NotFoundError, ValidationError, InternalError } from "@/lib/errors/AppError";
 import type { ResearchStream } from "@/types";
 
 const postSchema = z.object({
@@ -22,11 +25,10 @@ const SEED_MAX_LENGTH = 300;
 // and Competitors tabs' "Search Forums For This" action. Never generates
 // content itself: Reddit/forum posts must always be a reply to a thread
 // that job actually finds, never a standalone draft.
-export async function POST(
+export const POST = withErrorHandling(async (
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
-) {
-  try {
+) => {
     const { id } = await params;
 
     const cookieStore = await cookies();
@@ -52,10 +54,7 @@ export async function POST(
     } = await supabase.auth.getUser();
 
     if (!user) {
-      return NextResponse.json(
-        { error: "Unauthorized", code: "UNAUTHENTICATED" },
-        { status: 401 }
-      );
+      throw new UnauthorizedError(ErrorMessages.auth.UNAUTHORIZED);
     }
 
     const { data: membership } = await supabaseAdmin
@@ -67,10 +66,7 @@ export async function POST(
     const workspaceId = membership?.workspace_id as string | undefined;
 
     if (!workspaceId) {
-      return NextResponse.json(
-        { error: "No workspace found for this account.", code: "NO_WORKSPACE" },
-        { status: 403 }
-      );
+      throw new ForbiddenError(ErrorMessages.auth.NO_WORKSPACE, "NO_WORKSPACE");
     }
 
     const { data: app } = await supabaseAdmin
@@ -81,23 +77,14 @@ export async function POST(
       .single();
 
     if (!app) {
-      return NextResponse.json(
-        { error: "App not found.", code: "NOT_FOUND" },
-        { status: 404 }
-      );
+      throw new NotFoundError(ErrorMessages.apps.NOT_FOUND);
     }
 
     const json = await request.json().catch(() => null);
     const parsed = postSchema.safeParse(json);
 
     if (!parsed.success) {
-      return NextResponse.json(
-        {
-          error: parsed.error.issues[0]?.message ?? "Invalid request body.",
-          code: "VALIDATION_ERROR",
-        },
-        { status: 422 }
-      );
+      throw new ValidationError(parsed.error.issues[0]?.message ?? ErrorMessages.generic.INVALID_REQUEST_BODY);
     }
 
     const { data: finding } = await supabaseAdmin
@@ -109,17 +96,11 @@ export async function POST(
       .single();
 
     if (!finding) {
-      return NextResponse.json(
-        { error: "Research finding not found.", code: "NOT_FOUND" },
-        { status: 404 }
-      );
+      throw new NotFoundError(ErrorMessages.research.FINDING_NOT_FOUND);
     }
 
     if (!ALLOWED_STREAMS.includes(finding.stream as ResearchStream)) {
-      return NextResponse.json(
-        { error: "This finding can't be used to seed a forum search.", code: "TYPE_MISMATCH" },
-        { status: 422 }
-      );
+      throw new ValidationError(ErrorMessages.research.SEED_TYPE_MISMATCH, "TYPE_MISMATCH");
     }
 
     const seedText =
@@ -128,13 +109,7 @@ export async function POST(
         : parseCompetitorGap(finding.findings).gap;
 
     if (!seedText) {
-      return NextResponse.json(
-        {
-          error: "This finding is missing the text needed to seed a search.",
-          code: "INCOMPLETE_FINDING",
-        },
-        { status: 422 }
-      );
+      throw new ValidationError(ErrorMessages.research.SEED_INCOMPLETE, "INCOMPLETE_FINDING");
     }
 
     const { error: insertError } = await supabaseAdmin.from("forum_search_seeds").insert({
@@ -145,18 +120,8 @@ export async function POST(
     });
 
     if (insertError) {
-      return NextResponse.json(
-        { error: "Failed to queue forum search.", code: "SERVER_ERROR" },
-        { status: 500 }
-      );
+      throw new InternalError(ErrorMessages.research.SEED_FAILED);
     }
 
     return NextResponse.json({ success: true }, { status: 201 });
-  } catch (error) {
-    console.error("POST /api/apps/[id]/research/seed-forum-search error:", error);
-    return NextResponse.json(
-      { error: "Something went wrong. Please try again.", code: "SERVER_ERROR" },
-      { status: 500 }
-    );
-  }
-}
+});

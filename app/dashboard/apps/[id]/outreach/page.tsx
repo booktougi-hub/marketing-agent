@@ -3,7 +3,7 @@ import { notFound, redirect } from "next/navigation";
 import { createServerClient } from "@supabase/auth-helpers-nextjs";
 import { AppOutreachView } from "@/components/apps/app-outreach-view";
 import { supabaseAdmin } from "@/lib/supabase-server";
-import type { ColdEmailProspect, EmailInteraction } from "@/types";
+import type { ColdEmailProspect, EmailInteraction, IcpData, IcpStatus, PlanTier } from "@/types";
 
 export default async function AppOutreachPage({
   params,
@@ -48,12 +48,17 @@ export default async function AppOutreachPage({
     notFound();
   }
 
-  const { data: app } = await supabaseAdmin
-    .from("apps")
-    .select("id, name, source_url")
-    .eq("id", id)
-    .eq("workspace_id", workspaceId)
-    .single();
+  const [{ data: app }, { data: workspace }] = await Promise.all([
+    supabaseAdmin
+      .from("apps")
+      .select(
+        "id, name, source_url, agent_credits_used_this_week, agent_credits_reset_at, last_agent_action_at, icp_data, icp_status, first_outreach_completed"
+      )
+      .eq("id", id)
+      .eq("workspace_id", workspaceId)
+      .single(),
+    supabaseAdmin.from("workspaces").select("plan_tier").eq("id", workspaceId).single(),
+  ]);
 
   if (!app) {
     notFound();
@@ -90,6 +95,13 @@ export default async function AppOutreachPage({
         appId={id}
         initialProspects={prospects}
         initialInteractions={interactions}
+        planTier={(workspace?.plan_tier ?? "free") as PlanTier}
+        agentCreditsUsedThisWeek={app.agent_credits_used_this_week}
+        agentCreditsResetAt={app.agent_credits_reset_at}
+        lastAgentActionAt={app.last_agent_action_at}
+        initialIcpData={app.icp_data as IcpData | null}
+        initialIcpStatus={app.icp_status as IcpStatus}
+        firstOutreachCompleted={app.first_outreach_completed}
       />
     </div>
   );

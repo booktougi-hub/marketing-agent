@@ -1,5 +1,6 @@
 import { logger, schedules, tasks } from "@trigger.dev/sdk";
 import { supabaseAdmin } from "@/lib/supabase-server";
+import { handleJobError } from "@/lib/errors/jobErrorHandler";
 
 // Competitor Gap Analysis runs monthly, not weekly, since competitor
 // pricing/positioning/reviews don't shift week to week the way trending
@@ -33,9 +34,7 @@ export const monthlyCompetitorScan = schedules.task({
       logger.info(`monthly-competitor-scan: triggered analysis for ${activeApps.length} apps`);
       return { appsScanned: activeApps.length };
     } catch (err) {
-      const message =
-        err instanceof Error ? err.message : "monthly-competitor-scan failed unexpectedly.";
-      logger.error("monthly-competitor-scan failed", { error: message });
+      await handleJobError(err, { jobName: "monthly-competitor-scan" });
       throw err;
     }
   },

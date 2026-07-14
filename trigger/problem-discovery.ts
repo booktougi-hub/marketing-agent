@@ -1,6 +1,7 @@
 import { logger, schemaTask } from "@trigger.dev/sdk";
 import { z } from "zod";
-import { runResearchStream } from "@/lib/research-job";
+import { extractKeyPhrase, runResearchStream, type ResearchSearchQuery } from "@/lib/research-job";
+import { handleJobError } from "@/lib/errors/jobErrorHandler";
 
 const payloadSchema = z.object({
   app_id: z.string(),
@@ -42,15 +43,44 @@ export const problemDiscovery = schemaTask({
         appId: app_id,
         workspaceId: workspace_id,
         stream: "problem_discovery",
-        buildQueries: (dna) => {
-          const keyword = dna.target_audience || dna.problem || dna.name;
-          if (!keyword) return [];
-          return [
-            {
-              query: `site:reddit.com ${keyword} (annoying OR frustrating OR "wish there was" OR "does anyone know")`,
+        buildQueries: (dna, { logger, appId }) => {
+          const audiencePhrase = extractKeyPhrase(dna.target_audience);
+          const problemPhrase = extractKeyPhrase(dna.problem);
+
+          if (!audiencePhrase && !problemPhrase) {
+            logger.warn(
+              `problem-discovery skipped for app ${appId}: DNA has no target_audience or problem text to derive a search phrase from`,
+              { appId }
+            );
+            return [];
+          }
+
+          const queries: ResearchSearchQuery[] = [];
+          if (audiencePhrase) {
+            queries.push({
+              query: `site:reddit.com ${audiencePhrase} frustrating OR annoying`,
               label: "Reddit",
-            },
-            { query: `"${dna.problem}" complaints`, label: "Forum" },
+            });
+          }
+          if (problemPhrase) {
+            queries.push({ query: `${problemPhrase} complaints`, label: "Forum" });
+          }
+          return queries;
+        },
+        // Broader/differently-derived: just the product name instead of a
+        // shortened description — a last resort when the audience/problem
+        // phrasing itself turns up nothing.
+        buildFallbackQueries: (dna, { logger, appId }) => {
+          if (!dna.name) {
+            logger.warn(
+              `problem-discovery: no fallback available for app ${appId} — DNA has no product name either`,
+              { appId }
+            );
+            return [];
+          }
+          return [
+            { query: `site:reddit.com ${dna.name}`, label: "Reddit (broad)" },
+            { query: `${dna.name} problems OR issues OR complaints`, label: "Forum (broad)" },
           ];
         },
         systemPrompt: SYSTEM_PROMPT,
@@ -59,8 +89,12 @@ export const problemDiscovery = schemaTask({
 
       return result;
     } catch (err) {
-      const message = err instanceof Error ? err.message : "problem-discovery failed unexpectedly.";
-      logger.error("problem-discovery failed", { app_id, workspace_id, error: message });
+      await handleJobError(err, {
+        appId: app_id,
+        workspaceId: workspace_id,
+        jobName: "problem-discovery",
+        updateAppStatus: false,
+      });
       throw err;
     }
   },

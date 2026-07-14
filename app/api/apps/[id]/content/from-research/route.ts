@@ -1,11 +1,21 @@
 import { cookies } from "next/headers";
 import { NextResponse, type NextRequest } from "next/server";
 import { createServerClient } from "@supabase/auth-helpers-nextjs";
-import Anthropic from "@anthropic-ai/sdk";
 import { z } from "zod";
 import { supabaseAdmin } from "@/lib/supabase-server";
 import { parseCompetitorGap, parseProblem, parseTopic } from "@/lib/research";
 import { buildDevtoSystemPrompt, buildRealLinksBlock } from "@/lib/devto-article";
+import { withErrorHandling } from "@/lib/errors/apiHandler";
+import { ErrorMessages } from "@/lib/errors/messages";
+import { createAnthropicClient } from "@/lib/anthropic-client";
+import {
+  UnauthorizedError,
+  ForbiddenError,
+  NotFoundError,
+  ValidationError,
+  InternalError,
+  ExternalServiceError,
+} from "@/lib/errors/AppError";
 import type { AppDna, ResearchStream } from "@/types";
 
 const CLAUDE_MODEL = "claude-sonnet-5";
@@ -123,11 +133,10 @@ Constraints: 150-300 words, professional tone, written like a founder sharing a 
 Respond with ONLY the post text — no prose about what you're doing, no quotes around it, no code fences.`;
 }
 
-export async function POST(
+export const POST = withErrorHandling(async (
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
-) {
-  try {
+) => {
     const { id } = await params;
 
     const cookieStore = await cookies();
@@ -153,10 +162,7 @@ export async function POST(
     } = await supabase.auth.getUser();
 
     if (!user) {
-      return NextResponse.json(
-        { error: "Unauthorized", code: "UNAUTHENTICATED" },
-        { status: 401 }
-      );
+      throw new UnauthorizedError(ErrorMessages.auth.UNAUTHORIZED);
     }
 
     const { data: membership } = await supabaseAdmin
@@ -168,10 +174,7 @@ export async function POST(
     const workspaceId = membership?.workspace_id as string | undefined;
 
     if (!workspaceId) {
-      return NextResponse.json(
-        { error: "No workspace found for this account.", code: "NO_WORKSPACE" },
-        { status: 403 }
-      );
+      throw new ForbiddenError(ErrorMessages.auth.NO_WORKSPACE, "NO_WORKSPACE");
     }
 
     const { data: app } = await supabaseAdmin
@@ -182,30 +185,18 @@ export async function POST(
       .single();
 
     if (!app) {
-      return NextResponse.json(
-        { error: "App not found.", code: "NOT_FOUND" },
-        { status: 404 }
-      );
+      throw new NotFoundError(ErrorMessages.apps.NOT_FOUND);
     }
 
     if (!app.dna) {
-      return NextResponse.json(
-        { error: "This app has no DNA yet.", code: "NO_DNA" },
-        { status: 422 }
-      );
+      throw new ValidationError(ErrorMessages.apps.NO_DNA, "NO_DNA");
     }
 
     const json = await request.json().catch(() => null);
     const parsed = postSchema.safeParse(json);
 
     if (!parsed.success) {
-      return NextResponse.json(
-        {
-          error: parsed.error.issues[0]?.message ?? "Invalid request body.",
-          code: "VALIDATION_ERROR",
-        },
-        { status: 422 }
-      );
+      throw new ValidationError(parsed.error.issues[0]?.message ?? ErrorMessages.generic.INVALID_REQUEST_BODY);
     }
 
     const { research_finding_id, type, platform } = parsed.data;
@@ -220,25 +211,16 @@ export async function POST(
       .single();
 
     if (!finding) {
-      return NextResponse.json(
-        { error: "Research finding not found.", code: "NOT_FOUND" },
-        { status: 404 }
-      );
+      throw new NotFoundError(ErrorMessages.research.FINDING_NOT_FOUND);
     }
 
     if (finding.stream !== expectedStream) {
-      return NextResponse.json(
-        { error: "This finding doesn't match the requested type.", code: "TYPE_MISMATCH" },
-        { status: 422 }
-      );
+      throw new ValidationError(ErrorMessages.research.TYPE_MISMATCH, "TYPE_MISMATCH");
     }
 
     const findingInstruction = buildFindingInstruction(type, app.dna as AppDna, finding.findings);
     if (!findingInstruction) {
-      return NextResponse.json(
-        { error: "This finding is missing the data needed to draft a post.", code: "INCOMPLETE_FINDING" },
-        { status: 422 }
-      );
+      throw new ValidationError(ErrorMessages.research.INCOMPLETE_FINDING, "INCOMPLETE_FINDING");
     }
 
     const { data: activeStrategy } = await supabaseAdmin
@@ -276,7 +258,7 @@ export async function POST(
       });
     }
 
-    const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY! });
+    const anthropic = createAnthropicClient();
     let body: string;
     try {
       const message = await anthropic.messages.create({
@@ -297,17 +279,11 @@ export async function POST(
         .trim();
     } catch (err) {
       console.error("from-research: Claude call failed:", err);
-      return NextResponse.json(
-        { error: "Failed to generate a post from this finding.", code: "LLM_ERROR" },
-        { status: 500 }
-      );
+      throw new ExternalServiceError(ErrorMessages.content.FROM_RESEARCH_FAILED, "claude", "LLM_ERROR");
     }
 
     if (!body) {
-      return NextResponse.json(
-        { error: "Claude returned an empty post.", code: "LLM_ERROR" },
-        { status: 500 }
-      );
+      throw new InternalError(ErrorMessages.content.EMPTY_LLM_OUTPUT, "LLM_ERROR");
     }
 
     // Claude doesn't reliably self-enforce an exact character count, and
@@ -337,10 +313,7 @@ export async function POST(
       .single();
 
     if (insertError || !created) {
-      return NextResponse.json(
-        { error: "Failed to save the generated post.", code: "SERVER_ERROR" },
-        { status: 500 }
-      );
+      throw new InternalError(ErrorMessages.content.SAVE_GENERATED_FAILED);
     }
 
     await supabaseAdmin
@@ -351,11 +324,4 @@ export async function POST(
       .eq("workspace_id", workspaceId);
 
     return NextResponse.json({ content: created }, { status: 201 });
-  } catch (error) {
-    console.error("POST /api/apps/[id]/content/from-research error:", error);
-    return NextResponse.json(
-      { error: "Something went wrong. Please try again.", code: "SERVER_ERROR" },
-      { status: 500 }
-    );
-  }
-}
+});

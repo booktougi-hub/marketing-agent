@@ -56,6 +56,11 @@ export type AppStatus =
 
 export type AppTone = "casual" | "professional" | "technical";
 
+export interface AppStoreUrls {
+  play_store: string | null;
+  app_store: string | null;
+}
+
 export interface AppDna {
   name: string;
   tagline: string;
@@ -66,6 +71,14 @@ export interface AppDna {
   competitors: string[];
   tone: AppTone;
   additional_urls: string[];
+  // Detected from the scraped site itself (Play Store / App Store badge
+  // links, "Download on the App Store" style anchors) — independent of the
+  // product_type dropdown a user picks at onboarding, which is often wrong
+  // for landing pages that showcase a mobile app (e.g. product_type set to
+  // "web_app" for a page whose only real product is a Play Store listing).
+  // Optional because DNA rows extracted before this field existed won't
+  // have it.
+  app_store_urls?: AppStoreUrls;
 }
 
 // Shape not finalized yet — populated when the settings screen is built.
@@ -90,14 +103,71 @@ export interface App {
   url_changed_at: string | null;
   deleted_at: string | null;
   app_settings: AppSettings;
-  manual_research_count_this_week: number;
-  manual_research_reset_at: string | null;
-  last_manual_research_at: string | null;
   first_research_completed: boolean;
   first_research_completed_at: string | null;
+  pending_run_id: string | null;
+  pending_run_task: PendingRunTask | null;
+  agent_credits_used_this_week: number;
+  agent_credits_reset_at: string | null;
+  last_agent_action_at: string | null;
+  preferred_research_day: ResearchDay;
+  preferred_research_hour: number;
+  first_outreach_completed: boolean;
+  icp_data: IcpData | null;
+  icp_status: IcpStatus;
   created_at: string;
   updated_at: string;
 }
+
+export type PendingRunTask =
+  | "dna-extraction"
+  | "strategy-generation"
+  | "content-generation"
+  | "icp-inference"
+  | "outreach-preview";
+
+// ---------------------------------------------------------------------------
+// Outreach onboarding — ICP inference + one-time prospect preview
+// (trigger/icp-inference.ts, trigger/outreach-preview.ts)
+// ---------------------------------------------------------------------------
+
+export type IcpStatus = "pending_review" | "approved" | "needs_adjustment";
+
+export interface ApolloFilters {
+  person_titles: string[];
+  person_seniorities: string[];
+  organization_num_employees_ranges: string[];
+  organization_industries: string[];
+  // Only populated when DNA/category makes a specific tech stack inferable
+  // (e.g. "companies using Shopify") — omitted rather than guessed otherwise.
+  technologies: string[];
+}
+
+export interface IcpData {
+  summary: string;
+  apollo_filters: ApolloFilters;
+}
+
+// Freeform adjustments a founder submits via "Adjust this" — passed back
+// into icp-inference as additional context for a re-run, not persisted as
+// its own column (folded into the next icp_data.summary/apollo_filters).
+export interface IcpAdjustment {
+  company_stage: "bootstrapped" | "funded" | "established" | null;
+  exclusions: string | null;
+  geographic_focus: string | null;
+  persona_feedback: string | null;
+}
+
+export const RESEARCH_DAYS = [
+  "sunday",
+  "monday",
+  "tuesday",
+  "wednesday",
+  "thursday",
+  "friday",
+  "saturday",
+] as const;
+export type ResearchDay = (typeof RESEARCH_DAYS)[number];
 
 // ---------------------------------------------------------------------------
 // strategies
@@ -261,6 +331,7 @@ export interface ColdEmailProspect {
   status: ProspectStatus;
   personalised_email: string | null;
   personalisation_score: number | null;
+  is_preview: boolean;
   created_at: string;
 }
 

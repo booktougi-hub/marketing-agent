@@ -106,11 +106,18 @@ create table apps (
   url_changed_at  timestamp with time zone,      -- set when the user edits source_url after initial DNA extraction
   deleted_at      timestamp with time zone,      -- soft delete — set instead of removing the row; excluded by RLS (see policy below)
   app_settings    jsonb default '{}'::jsonb,     -- scheduling and notification preferences (settings screen)
-  manual_research_count_this_week integer default 0,   -- manual research triggers used this week, rate-limited per plan
-  manual_research_reset_at        timestamp with time zone,  -- when manual_research_count_this_week resets to 0
-  last_manual_research_at         timestamp with time zone,  -- timestamp of the most recent manual research trigger
   first_research_completed        boolean default false,     -- true once the app's first research run (any stream) has been triggered
   first_research_completed_at     timestamp with time zone,  -- when first_research_completed was set true, for display copy ("completed on [date]")
+  pending_run_id  text,                          -- Trigger.dev run id of the in-flight pipeline job for this app (dna-extraction/strategy-generation/content-generation), if any
+  pending_run_task text,                         -- which task pending_run_id refers to; null whenever pending_run_id is null
+  agent_credits_used_this_week integer default 0,      -- unified manual-agent-action credits used this week, rate-limited per plan (see lib/agentCredits.ts)
+  agent_credits_reset_at       timestamp with time zone,  -- when agent_credits_used_this_week resets to 0
+  last_agent_action_at         timestamp with time zone,  -- timestamp of the most recent manual agent action of any type (6h cooldown applies across all action types, not per-type)
+  preferred_research_day       text default 'sunday',    -- UTC day name the weekly research scan targets for this app (lib/schedule.ts RESEARCH_DAYS)
+  preferred_research_hour      integer default 23,       -- UTC hour (0-23) the weekly research scan targets for this app
+  first_outreach_completed boolean not null default false,  -- true once the app's first outreach ICP+preview run has been triggered
+  icp_data        jsonb,                         -- { summary: string, apollo_filters: {...} } from trigger/icp-inference.ts
+  icp_status      text not null default 'pending_review',  -- 'pending_review' | 'approved' | 'needs_adjustment'
   created_at      timestamp with time zone default now(),
   updated_at      timestamp with time zone default now()
 );
@@ -158,6 +165,47 @@ create index idx_apps_status on apps(status);
 > (HTTP 200 + an `image/*` content type) before being saved, so the column is
 > either a real, loadable image or null; the UI's `AppIcon` component falls back
 > to a first-letter avatar either way (null, or an image that later 404s).
+>
+> **Migration note (2026-07-11):** `pending_run_id` and `pending_run_task` were
+> added via `add_pending_run_tracking_to_apps`. Every call site that triggers
+> `dna-extraction`, `strategy-generation`, or `content-generation` sets these to
+> the returned run handle's id and the task name; each of those three tasks
+> clears them (to null) on both its success and its existing catch-block
+> failure path. `trigger/job-watchdog.ts` runs every 5 minutes and checks any
+> row where `pending_run_id` is still set against Trigger.dev's actual run
+> status — this exists because a run can be `CANCELED`/`EXPIRED`/`CRASHED`/
+> `SYSTEM_FAILURE`d without the task's own code ever executing (no worker ever
+> claimed it, or the worker died mid-run), in which case the task's own
+> catch-block error handling never gets a chance to run and the app row would
+> otherwise sit in a stale in-progress state forever. No RLS change needed —
+> `apps_all` already covers new columns on the same row.
+>
+> **Migration note (2026-07-13):** `manual_research_count_this_week`,
+> `manual_research_reset_at`, and `last_manual_research_at` were replaced via
+> `add_unified_agent_credit_system_to_apps` with `agent_credits_used_this_week`,
+> `agent_credits_reset_at`, and `last_agent_action_at` — the single-purpose
+> manual-research rate limit became a unified Agent Action Credit system
+> usable by every manually-triggerable agent (topic/problem research, forum
+> opportunity scan, competitor gap analysis, and — once built — cold email
+> prospecting), each action costing a different number of credits per
+> `lib/agentCredits.ts`. Existing counts/timestamps were copied over before
+> the old columns were dropped, so no app lost its in-progress weekly state.
+> `preferred_research_day` and `preferred_research_hour` were added in the
+> same migration — per-app UTC day/hour the weekly research scan
+> (`trigger/weekly-research-scan.ts`) targets for that app; see that file for
+> how the cron reads them. No RLS change needed — `apps_all` already covers
+> new columns on the same row.
+>
+> **Migration note (2026-07-14):** `first_outreach_completed`, `icp_data`,
+> and `icp_status` were added via `add_outreach_onboarding_columns`, and
+> `cold_email_prospects.is_preview` (see that table) in the same migration —
+> part of the V3→V1 pull-forward documented in PHASES.md's Notes Log
+> (2026-07-14). `trigger/icp-inference.ts` writes `icp_data` (both the
+> founder-facing summary and the structured Apollo filters) and sets
+> `icp_status = 'pending_review'`; `trigger/outreach-preview.ts` sets
+> `first_outreach_completed = true` once its 5-prospect preview batch is
+> saved. No RLS change needed — `apps_all` already covers new columns on the
+> same row.
 
 **DNA JSON structure (saved in `dna` column):**
 ```json
@@ -391,6 +439,7 @@ create table cold_email_prospects (
   -- status: 'researched' | 'verified' | 'personalised' | 'approved' | 'sent' | 'replied' | 'unsubscribed' | 'bounced'
   personalised_email text,         -- the personalised email body
   personalisation_score integer,   -- 0-100, Claude's confidence score
+  is_preview      boolean not null default false,  -- true for the 5 one-time onboarding previews from trigger/outreach-preview.ts, false for the regular monthly batch
   created_at      timestamp with time zone default now()
 );
 
@@ -408,6 +457,11 @@ create index idx_prospects_workspace_id on cold_email_prospects(workspace_id);
 create index idx_prospects_app_id on cold_email_prospects(app_id);
 create index idx_prospects_status on cold_email_prospects(status);
 ```
+
+> **Migration note (2026-07-14):** `is_preview` was added via
+> `add_outreach_onboarding_columns` (same migration as the `apps` table
+> columns above). `prospects_all` RLS already covers it — same row, no
+> policy change needed.
 
 ---
 

@@ -8,3 +8,6 @@ export { forumOpportunityFinder } from "./forum-opportunity-finder";
 export { competitorGapAnalysis } from "./competitor-gap-analysis";
 export { weeklyResearchScan } from "./weekly-research-scan";
 export { monthlyCompetitorScan } from "./monthly-competitor-scan";
+export { jobWatchdog } from "./job-watchdog";
+export { icpInference } from "./icp-inference";
+export { outreachPreview } from "./outreach-preview";

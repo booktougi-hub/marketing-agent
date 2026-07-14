@@ -24,6 +24,8 @@ import {
 } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { getRemainingCredits } from "@/lib/reanalysis";
+import { ErrorMessage } from "@/components/shared/ErrorMessage";
+import { parseApiError } from "@/lib/errors/parseApiError";
 import type { PlanTier, ProductType } from "@/types";
 
 const PRODUCT_TYPE_OPTIONS: { value: ProductType; label: string }[] = [
@@ -98,9 +100,9 @@ export function AppIdentitySection({
           additional_context: additionalContext,
         }),
       });
-      const json = await res.json().catch(() => null);
       if (!res.ok) {
-        setSaveError(json?.error ?? "Failed to save changes.");
+        const { message } = await parseApiError(res);
+        setSaveError(message);
         return;
       }
       setSaveSuccess(true);
@@ -121,9 +123,9 @@ export function AppIdentitySection({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ new_url: newUrlInput }),
       });
-      const json = await res.json().catch(() => null);
       if (!res.ok) {
-        setUrlError(json?.error ?? "Failed to change URL.");
+        const { message } = await parseApiError(res);
+        setUrlError(message);
         return;
       }
       setCurrentUrl(newUrlInput);
@@ -142,9 +144,9 @@ export function AppIdentitySection({
     setReanalyseError(null);
     try {
       const res = await fetch(`/api/apps/${appId}/reanalyse`, { method: "POST" });
-      const json = await res.json().catch(() => null);
       if (!res.ok) {
-        setReanalyseError(json?.error ?? "Failed to start re-analysis.");
+        const { message } = await parseApiError(res);
+        setReanalyseError(message);
         return;
       }
       setReanalyseModalOpen(false);
@@ -226,7 +228,7 @@ export function AppIdentitySection({
           </p>
         </div>
 
-        {saveError && <p className="text-sm text-destructive">{saveError}</p>}
+        {saveError && <ErrorMessage message={saveError} />}
         {saveSuccess && <p className="text-sm text-muted-foreground">Saved.</p>}
 
         <div className="flex flex-wrap items-center justify-between gap-3 border-t pt-4">
@@ -269,7 +271,7 @@ export function AppIdentitySection({
               onChange={(e) => setNewUrlInput(e.target.value)}
               placeholder="https://yourapp.com"
             />
-            {urlError && <p className="text-sm text-destructive">{urlError}</p>}
+            {urlError && <ErrorMessage message={urlError} />}
           </div>
 
           <DialogFooter>
@@ -303,7 +305,7 @@ export function AppIdentitySection({
             </DialogDescription>
           </DialogHeader>
 
-          {reanalyseError && <p className="text-sm text-destructive">{reanalyseError}</p>}
+          {reanalyseError && <ErrorMessage message={reanalyseError} />}
 
           <DialogFooter>
             <Button

@@ -1,7 +1,10 @@
 import { logger, schemaTask } from "@trigger.dev/sdk";
-import Anthropic from "@anthropic-ai/sdk";
 import { z } from "zod";
 import { supabaseAdmin } from "@/lib/supabase-server";
+import { handleJobError } from "@/lib/errors/jobErrorHandler";
+import { callExternalService, ExternalServiceError } from "@/lib/errors/AppError";
+import { ErrorMessages } from "@/lib/errors/messages";
+import { createAnthropicClient } from "@/lib/anthropic-client";
 import type { AppDna } from "@/types";
 
 const CLAUDE_MODEL = "claude-sonnet-5";
@@ -56,7 +59,7 @@ export const strategyGeneration = schemaTask({
     const { app_id, workspace_id } = payload;
 
     try {
-      const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY! });
+      const anthropic = createAnthropicClient();
 
       const { data: app, error: appError } = await supabaseAdmin
         .from("apps")
@@ -87,12 +90,14 @@ Use this additional context to make the strategy more specific and accurate. The
     : ""
 }`;
 
-      const message = await anthropic.messages.create({
-        model: CLAUDE_MODEL,
-        max_tokens: 4096,
-        system: SYSTEM_PROMPT,
-        messages: [{ role: "user", content: userMessage }],
-      });
+      const message = await callExternalService("claude", ErrorMessages.external.CLAUDE_FAILED, () =>
+        anthropic.messages.create({
+          model: CLAUDE_MODEL,
+          max_tokens: 4096,
+          system: SYSTEM_PROMPT,
+          messages: [{ role: "user", content: userMessage }],
+        })
+      );
 
       let responseText = "";
       for (const block of message.content) {
@@ -109,9 +114,11 @@ Use this additional context to make the strategy more specific and accurate. The
       try {
         strategy = strategySchema.parse(JSON.parse(responseText));
       } catch (err) {
-        throw new Error(
-          `Claude returned an unparseable strategy object: ${err instanceof Error ? err.message : String(err)}`
-        );
+        logger.error("strategy-generation: failed to parse Claude's response", {
+          raw_response: responseText.slice(0, 2000),
+          error: err instanceof Error ? err.message : String(err),
+        });
+        throw new ExternalServiceError(ErrorMessages.external.CLAUDE_FAILED, "claude");
       }
 
       const { error: insertError } = await supabaseAdmin.from("strategies").insert({
@@ -132,21 +139,13 @@ Use this additional context to make the strategy more specific and accurate. The
 
       await supabaseAdmin
         .from("apps")
-        .update({ status: "awaiting_approval" })
+        .update({ status: "awaiting_approval", pending_run_id: null, pending_run_task: null })
         .eq("id", app_id)
         .eq("workspace_id", workspace_id);
 
       return { app_id, status: "awaiting_approval" as const };
     } catch (err) {
-      const message = err instanceof Error ? err.message : "Strategy generation failed.";
-      logger.error("strategy-generation failed", { app_id, workspace_id, error: message });
-
-      await supabaseAdmin
-        .from("apps")
-        .update({ status: "error", error_message: message })
-        .eq("id", app_id)
-        .eq("workspace_id", workspace_id);
-
+      await handleJobError(err, { appId: app_id, workspaceId: workspace_id, jobName: "strategy-generation" });
       throw err;
     }
   },

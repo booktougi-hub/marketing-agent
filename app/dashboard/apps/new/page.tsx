@@ -22,6 +22,8 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Card, CardContent } from "@/components/ui/card";
+import { ErrorMessage } from "@/components/shared/ErrorMessage";
+import { parseApiError } from "@/lib/errors/parseApiError";
 import type { ProductType } from "@/types";
 
 const PRODUCT_TYPE_OPTIONS: { value: ProductType; label: string }[] = [
@@ -126,20 +128,16 @@ export default function NewAppPage() {
       });
 
       if (!response.ok) {
-        let message = "Failed to create app.";
-        try {
-          const parsed = (await response.json()) as { error?: string };
-          if (parsed.error) message = parsed.error;
-        } catch {
-          // response wasn't JSON, fall back to default message
-        }
-        throw new Error(message);
+        const parsed = await parseApiError(response);
+        setError(parsed.message);
+        setSubmitting(false);
+        return;
       }
 
       const data = (await response.json()) as { id: string };
       router.push(`/dashboard/apps/${data.id}`);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to create app.");
+    } catch {
+      setError("Failed to create app.");
       setSubmitting(false);
     }
   }
@@ -313,12 +311,10 @@ export default function NewAppPage() {
               </Button>
 
               {error && (
-                <p
-                  role="alert"
-                  className="rounded-lg bg-destructive/10 px-2.5 py-2 text-sm text-destructive"
-                >
-                  {error}
-                </p>
+                <ErrorMessage
+                  message={error}
+                  className="rounded-lg bg-destructive/10 px-2.5 py-2"
+                />
               )}
             </div>
           </form>

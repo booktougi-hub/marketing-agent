@@ -5,8 +5,10 @@ import { Check, ChevronDown, Copy, ExternalLink, Loader2 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
+import { AgentActionEmptyState } from "@/components/apps/agent-action-empty-state";
 import { cn } from "@/lib/utils";
 import { formatTimeAgo } from "@/lib/time";
+import { getNextResearchOccurrence } from "@/lib/schedule";
 import {
   OPPORTUNITY_PLATFORM_COLOR_VAR,
   OPPORTUNITY_PLATFORM_LABEL,
@@ -15,7 +17,7 @@ import {
   parseForumOpportunity,
   type OpportunityPlatform,
 } from "@/lib/opportunity";
-import type { ResearchFinding, ResearchStatus } from "@/types";
+import type { PlanTier, ResearchDay, ResearchFinding, ResearchStatus } from "@/types";
 
 export type OpportunityFinding = Pick<
   ResearchFinding,
@@ -242,9 +244,25 @@ function OpportunityCard({
 export function AppOpportunitiesView({
   appId,
   initialFindings,
+  planTier,
+  agentCreditsUsedThisWeek,
+  agentCreditsResetAt,
+  lastAgentActionAt,
+  firstResearchCompleted,
+  firstResearchCompletedAt,
+  preferredResearchDay,
+  preferredResearchHour,
 }: {
   appId: string;
   initialFindings: OpportunityFinding[];
+  planTier: PlanTier;
+  agentCreditsUsedThisWeek: number;
+  agentCreditsResetAt: string | null;
+  lastAgentActionAt: string | null;
+  firstResearchCompleted: boolean;
+  firstResearchCompletedAt: string | null;
+  preferredResearchDay: ResearchDay;
+  preferredResearchHour: number;
 }) {
   const [findings, setFindings] = useState(initialFindings);
   const [timeTab, setTimeTab] = useState<TimeTab>("week");
@@ -381,7 +399,16 @@ export function AppOpportunitiesView({
       </div>
 
       {findings.length === 0 ? (
-        <EmptyState message="The research agent is scanning Reddit, Hacker News, Quora, and LinkedIn for threads where your app can help. Check back tomorrow." />
+        <AgentActionEmptyState
+          appId={appId}
+          actionType="forum_opportunity_scan"
+          planTier={planTier}
+          agentCreditsUsedThisWeek={agentCreditsUsedThisWeek}
+          agentCreditsResetAt={agentCreditsResetAt}
+          lastAgentActionAt={lastAgentActionAt}
+          firstRun={{ completed: firstResearchCompleted, completedAt: firstResearchCompletedAt }}
+          nextRunAt={getNextResearchOccurrence(preferredResearchDay, preferredResearchHour)}
+        />
       ) : visible.length === 0 ? (
         <EmptyState message="No opportunities match these filters." />
       ) : (

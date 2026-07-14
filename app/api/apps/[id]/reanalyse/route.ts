@@ -5,6 +5,15 @@ import { tasks } from "@trigger.dev/sdk";
 import { z } from "zod";
 import { supabaseAdmin } from "@/lib/supabase-server";
 import { getRemainingCredits, isCreditResetDue, nextResetDate } from "@/lib/reanalysis";
+import { withErrorHandling } from "@/lib/errors/apiHandler";
+import { ErrorMessages } from "@/lib/errors/messages";
+import {
+  UnauthorizedError,
+  ForbiddenError,
+  NotFoundError,
+  ValidationError,
+  InternalError,
+} from "@/lib/errors/AppError";
 import type { PlanTier } from "@/types";
 import type { dnaExtraction } from "@/trigger/dna-extraction";
 
@@ -16,11 +25,10 @@ const postSchema = z.object({
 // when `new_url` is present this both changes the URL and performs the same
 // re-analysis, rather than duplicating the credit/trigger logic in a second
 // route.
-export async function POST(
+export const POST = withErrorHandling(async (
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
-) {
-  try {
+) => {
     const { id } = await params;
 
     const cookieStore = await cookies();
@@ -46,10 +54,7 @@ export async function POST(
     } = await supabase.auth.getUser();
 
     if (!user) {
-      return NextResponse.json(
-        { error: "Unauthorized", code: "UNAUTHENTICATED" },
-        { status: 401 }
-      );
+      throw new UnauthorizedError(ErrorMessages.auth.UNAUTHORIZED);
     }
 
     const { data: membership } = await supabaseAdmin
@@ -61,23 +66,14 @@ export async function POST(
     const workspaceId = membership?.workspace_id as string | undefined;
 
     if (!workspaceId) {
-      return NextResponse.json(
-        { error: "No workspace found for this account.", code: "NO_WORKSPACE" },
-        { status: 403 }
-      );
+      throw new ForbiddenError(ErrorMessages.auth.NO_WORKSPACE, "NO_WORKSPACE");
     }
 
     const json = await request.json().catch(() => ({}));
     const parsed = postSchema.safeParse(json);
 
     if (!parsed.success) {
-      return NextResponse.json(
-        {
-          error: parsed.error.issues[0]?.message ?? "Invalid request body.",
-          code: "VALIDATION_ERROR",
-        },
-        { status: 422 }
-      );
+      throw new ValidationError(parsed.error.issues[0]?.message ?? ErrorMessages.generic.INVALID_REQUEST_BODY);
     }
 
     const { data: workspace } = await supabaseAdmin
@@ -98,10 +94,7 @@ export async function POST(
       .single();
 
     if (!app) {
-      return NextResponse.json(
-        { error: "App not found.", code: "NOT_FOUND" },
-        { status: 404 }
-      );
+      throw new NotFoundError(ErrorMessages.apps.NOT_FOUND);
     }
 
     const remainingCredits = getRemainingCredits(
@@ -111,21 +104,12 @@ export async function POST(
     );
 
     if (remainingCredits !== null && remainingCredits <= 0) {
-      return NextResponse.json(
-        {
-          error: "No re-analysis credits remaining. Upgrade your plan for more credits.",
-          code: "NO_CREDITS",
-        },
-        { status: 403 }
-      );
+      throw new ForbiddenError(ErrorMessages.apps.NO_CREDITS_REMAINING, "NO_CREDITS");
     }
 
     const newUrl = parsed.data.new_url;
     if (newUrl && app.url_changed_at) {
-      return NextResponse.json(
-        { error: "The app URL has already been changed once.", code: "URL_ALREADY_CHANGED" },
-        { status: 422 }
-      );
+      throw new ValidationError(ErrorMessages.apps.URL_LOCKED, "URL_ALREADY_CHANGED");
     }
 
     const resetDue = isCreditResetDue(app.reanalysis_credits_reset_at);
@@ -152,10 +136,7 @@ export async function POST(
       .eq("workspace_id", workspaceId);
 
     if (updateError) {
-      return NextResponse.json(
-        { error: "Failed to start re-analysis.", code: "SERVER_ERROR" },
-        { status: 500 }
-      );
+      throw new InternalError(ErrorMessages.apps.TRIGGER_REANALYSE_FAILED);
     }
 
     // Superseding the active strategy keeps the Strategy page from showing
@@ -169,36 +150,33 @@ export async function POST(
       .eq("status", "active");
 
     try {
-      await tasks.trigger<typeof dnaExtraction>("dna-extraction", {
+      const handle = await tasks.trigger<typeof dnaExtraction>("dna-extraction", {
         app_id: id,
         workspace_id: workspaceId,
         source_url: sourceUrl,
         has_additional_context: !!app.additional_context,
         has_docs: (app.doc_paths?.length ?? 0) > 0,
       });
+      await supabaseAdmin
+        .from("apps")
+        .update({ pending_run_id: handle.id, pending_run_task: "dna-extraction" })
+        .eq("id", id)
+        .eq("workspace_id", workspaceId);
     } catch (err) {
       console.error("Failed to trigger dna-extraction:", err);
       await supabaseAdmin
         .from("apps")
         .update({
           status: "error",
-          error_message: "Failed to start re-analysis.",
+          error_message: ErrorMessages.apps.TRIGGER_REANALYSE_FAILED,
+          pending_run_id: null,
+          pending_run_task: null,
         })
         .eq("id", id)
         .eq("workspace_id", workspaceId);
 
-      return NextResponse.json(
-        { error: "Failed to start re-analysis.", code: "SERVER_ERROR" },
-        { status: 500 }
-      );
+      throw new InternalError(ErrorMessages.apps.TRIGGER_REANALYSE_FAILED);
     }
 
     return NextResponse.json({ success: true }, { status: 200 });
-  } catch (error) {
-    console.error("POST /api/apps/[id]/reanalyse error:", error);
-    return NextResponse.json(
-      { error: "Something went wrong. Please try again.", code: "SERVER_ERROR" },
-      { status: 500 }
-    );
-  }
-}
+});

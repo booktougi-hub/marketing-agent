@@ -4,6 +4,9 @@ import { createServerClient } from "@supabase/auth-helpers-nextjs";
 import { tasks } from "@trigger.dev/sdk";
 import { z } from "zod";
 import { supabaseAdmin } from "@/lib/supabase-server";
+import { withErrorHandling } from "@/lib/errors/apiHandler";
+import { ErrorMessages } from "@/lib/errors/messages";
+import { UnauthorizedError, ForbiddenError, ValidationError, InternalError } from "@/lib/errors/AppError";
 import type { dnaExtraction } from "@/trigger/dna-extraction";
 import type { ProductType } from "@/types";
 
@@ -30,8 +33,7 @@ function isProductType(value: string): value is ProductType {
 
 const urlSchema = z.string().url();
 
-export async function POST(request: NextRequest) {
-  try {
+export const POST = withErrorHandling(async (request: NextRequest) => {
     const cookieStore = await cookies();
     const supabase = createServerClient(
       process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -57,10 +59,7 @@ export async function POST(request: NextRequest) {
     } = await supabase.auth.getUser();
 
     if (!user) {
-      return NextResponse.json(
-        { error: "Unauthorized", code: "UNAUTHENTICATED" },
-        { status: 401 }
-      );
+      throw new UnauthorizedError(ErrorMessages.auth.UNAUTHORIZED);
     }
 
     const { data: membership } = await supabaseAdmin
@@ -72,10 +71,7 @@ export async function POST(request: NextRequest) {
     const workspaceId = membership?.workspace_id as string | undefined;
 
     if (!workspaceId) {
-      return NextResponse.json(
-        { error: "No workspace found for this account.", code: "NO_WORKSPACE" },
-        { status: 403 }
-      );
+      throw new ForbiddenError(ErrorMessages.auth.NO_WORKSPACE, "NO_WORKSPACE");
     }
 
     const formData = await request.formData();
@@ -89,10 +85,7 @@ export async function POST(request: NextRequest) {
 
     const urlResult = urlSchema.safeParse(url);
     if (!urlResult.success) {
-      return NextResponse.json(
-        { error: "Please provide a valid URL", code: "VALIDATION_ERROR" },
-        { status: 422 }
-      );
+      throw new ValidationError(ErrorMessages.apps.INVALID_URL);
     }
 
     const productType: ProductType = isProductType(productTypeRaw)
@@ -117,10 +110,7 @@ export async function POST(request: NextRequest) {
         .eq("workspace_id", workspaceId);
 
       if ((count ?? 0) >= 1) {
-        return NextResponse.json(
-          { error: "Upgrade to Solo to add more apps", code: "PLAN_LIMIT_REACHED" },
-          { status: 403 }
-        );
+        throw new ForbiddenError(ErrorMessages.apps.PLAN_LIMIT_REACHED, "PLAN_LIMIT_REACHED");
       }
     }
 
@@ -138,10 +128,7 @@ export async function POST(request: NextRequest) {
       .single();
 
     if (insertError || !newApp) {
-      return NextResponse.json(
-        { error: "Failed to create app.", code: "SERVER_ERROR" },
-        { status: 500 }
-      );
+      throw new InternalError(ErrorMessages.apps.CREATE_FAILED);
     }
 
     if (docs.length > 0) {
@@ -190,13 +177,21 @@ export async function POST(request: NextRequest) {
     }
 
     try {
-      await tasks.trigger<typeof dnaExtraction>("dna-extraction", {
+      const handle = await tasks.trigger<typeof dnaExtraction>("dna-extraction", {
         app_id: newApp.id,
         workspace_id: workspaceId,
         source_url: urlResult.data,
         has_additional_context: !!additionalContext,
         has_docs: docs.length > 0,
       });
+      // Tracked so trigger/job-watchdog.ts can detect a run that never gets
+      // to execute its own error handling (worker unavailable, killed
+      // mid-run, etc.) instead of leaving this app stuck at "extracting".
+      await supabaseAdmin
+        .from("apps")
+        .update({ pending_run_id: handle.id, pending_run_task: "dna-extraction" })
+        .eq("id", newApp.id)
+        .eq("workspace_id", workspaceId);
     } catch (err) {
       console.error("Failed to trigger dna-extraction:", err);
       // The app record was created successfully even if the job trigger
@@ -205,18 +200,11 @@ export async function POST(request: NextRequest) {
         .from("apps")
         .update({
           status: "error",
-          error_message: "Failed to start DNA extraction.",
+          error_message: ErrorMessages.apps.TRIGGER_DNA_EXTRACTION_FAILED,
         })
         .eq("id", newApp.id)
         .eq("workspace_id", workspaceId);
     }
 
     return NextResponse.json({ id: newApp.id }, { status: 201 });
-  } catch (error) {
-    console.error("POST /api/apps error:", error);
-    return NextResponse.json(
-      { error: "Something went wrong. Please try again.", code: "SERVER_ERROR" },
-      { status: 500 }
-    );
-  }
-}
+});

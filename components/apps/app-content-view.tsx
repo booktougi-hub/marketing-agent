@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { CalendarDays, Loader2, Rows3 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -14,6 +14,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
+import { supabase } from "@/lib/supabase";
 import type { Content, ContentPlatform } from "@/types";
 import { ContentCalendarView } from "@/components/apps/content-calendar-view";
 import {
@@ -114,6 +115,36 @@ export function AppContentView({
 
   const [deleteTarget, setDeleteTarget] = useState<ContentWithAnalytics | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
+
+  // content-generation runs in the background after approval — this page
+  // (and initialContent) can render before that job finishes, so without a
+  // subscription the newly-generated posts never show up until a manual
+  // reload. Mirrors the INSERT-subscription pattern already used for
+  // research findings in components/apps/app-research-view.tsx.
+  useEffect(() => {
+    const channel = supabase
+      .channel(`app-content-${appId}`)
+      .on(
+        "postgres_changes",
+        {
+          event: "INSERT",
+          schema: "public",
+          table: "content",
+          filter: `app_id=eq.${appId}`,
+        },
+        (payload) => {
+          const row = payload.new as Content;
+          setContent((prev) =>
+            prev.some((c) => c.id === row.id) ? prev : [...prev, { ...row, analytics: null }]
+          );
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [appId]);
 
   function setRowError(id: string, message: string | null) {
     setRowErrors((prev) => {

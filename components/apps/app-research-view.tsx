@@ -3,11 +3,11 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
-import { ExternalLink, Loader2, Minus, Search, TrendingDown, TrendingUp } from "lucide-react";
+import { ExternalLink, Loader2, Search, Minus, TrendingDown, TrendingUp } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
-import { RunResearchControl } from "@/components/apps/run-research-control";
+import { AgentActionEmptyState } from "@/components/apps/agent-action-empty-state";
 import { cn } from "@/lib/utils";
 import { supabase } from "@/lib/supabase";
 import {
@@ -17,77 +17,13 @@ import {
   parseProblem,
   parseTopic,
 } from "@/lib/research";
-import {
-  UNLIMITED_MANUAL_RESEARCH_PLANS,
-  getCooldownHoursRemaining,
-  getRemainingManualRuns,
-} from "@/lib/manual-research";
-import type { ContentPlatform, PlanTier, ResearchFinding } from "@/types";
+import { getNextMonthlyOccurrence, getNextResearchOccurrence, MONTHLY_AUTOMATIONS } from "@/lib/schedule";
+import type { ContentPlatform, PlanTier, ResearchDay, ResearchFinding } from "@/types";
 
 type FindingRow = Pick<ResearchFinding, "id" | "findings" | "status" | "week_of" | "created_at">;
 type FindingType = "topic" | "problem" | "competitor_gap";
 type DraftPlatform = "twitter" | "linkedin" | "devto";
 type DraftedPlatformsMap = Record<string, ContentPlatform[]>;
-
-interface ResearchRunState {
-  remaining: number;
-  cooldownHoursRemaining: number;
-  isUnlimited: boolean;
-  triggering: boolean;
-  onRun: () => void;
-}
-
-function ResearchEmptyState({
-  firstResearchCompleted,
-  firstResearchCompletedAt,
-  runState,
-  nextScanLabel = "Sunday night",
-}: {
-  firstResearchCompleted: boolean;
-  firstResearchCompletedAt: string | null;
-  runState: ResearchRunState;
-  nextScanLabel?: string;
-}) {
-  if (!firstResearchCompleted) {
-    return (
-      <Card>
-        <CardContent className="flex flex-col items-center justify-center gap-3 py-16 text-center">
-          <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
-          <p className="max-w-md text-sm text-muted-foreground">
-            Your first research scan is running now. This usually takes a few minutes.
-          </p>
-        </CardContent>
-      </Card>
-    );
-  }
-
-  const dateLabel = firstResearchCompletedAt
-    ? new Date(firstResearchCompletedAt).toLocaleDateString("en-US", { dateStyle: "medium" })
-    : null;
-
-  const canRunNow = runState.isUnlimited || runState.remaining > 0;
-
-  return (
-    <Card>
-      <CardContent className="flex flex-col items-center justify-center gap-4 py-16 text-center">
-        <p className="max-w-md text-sm text-muted-foreground">
-          Your first research scan{dateLabel ? ` completed on ${dateLabel}` : " completed"} but
-          found no results yet — this can happen for very new products with limited public
-          discussion. Your next automatic scan runs {nextScanLabel}.
-          {canRunNow && (
-            <>
-              {" "}
-              You have {runState.isUnlimited ? "unlimited" : runState.remaining} manual scan
-              {!runState.isUnlimited && runState.remaining === 1 ? "" : "s"} available this week
-              if you would like to check again sooner.
-            </>
-          )}
-        </p>
-        {canRunNow && <RunResearchControl {...runState} />}
-      </CardContent>
-    </Card>
-  );
-}
 
 type ResearchTab = "topics" | "problems" | "competitors";
 
@@ -441,25 +377,36 @@ export function AppResearchView({
   initialTopics,
   initialProblems,
   initialCompetitors,
+  knownCompetitors,
   initialDraftedPlatforms,
   planTier,
-  manualResearchCountThisWeek,
-  manualResearchResetAt,
-  lastManualResearchAt,
+  agentCreditsUsedThisWeek,
+  agentCreditsResetAt,
+  lastAgentActionAt,
   firstResearchCompleted,
   firstResearchCompletedAt,
+  preferredResearchDay,
+  preferredResearchHour,
 }: {
   appId: string;
   initialTopics: FindingRow[];
   initialProblems: FindingRow[];
   initialCompetitors: FindingRow[];
+  // The app's DNA-listed (or auto-discovered) competitor names — shown even
+  // when no gap finding exists yet, since a gap only appears once Claude
+  // finds a genuine, groundable weakness for one of them. Without this, a
+  // freshly-discovered competitor list is invisible in the UI until/unless
+  // that happens.
+  knownCompetitors: string[];
   initialDraftedPlatforms: DraftedPlatformsMap;
   planTier: PlanTier;
-  manualResearchCountThisWeek: number;
-  manualResearchResetAt: string | null;
-  lastManualResearchAt: string | null;
+  agentCreditsUsedThisWeek: number;
+  agentCreditsResetAt: string | null;
+  lastAgentActionAt: string | null;
   firstResearchCompleted: boolean;
   firstResearchCompletedAt: string | null;
+  preferredResearchDay: ResearchDay;
+  preferredResearchHour: number;
 }) {
   const [tab, setTab] = useState<ResearchTab>("topics");
   const [topics, setTopics] = useState(initialTopics);
@@ -469,14 +416,13 @@ export function AppResearchView({
     initialDraftedPlatforms
   );
 
-  const [remaining, setRemaining] = useState(() =>
-    getRemainingManualRuns(planTier, manualResearchCountThisWeek, manualResearchResetAt)
+  const nextWeeklyResearchRun = getNextResearchOccurrence(
+    preferredResearchDay,
+    preferredResearchHour
   );
-  const [cooldownHoursRemaining, setCooldownHoursRemaining] = useState(() =>
-    getCooldownHoursRemaining(lastManualResearchAt)
+  const nextCompetitorScanRun = getNextMonthlyOccurrence(
+    MONTHLY_AUTOMATIONS.find((a) => a.id === "monthly-competitor-scan")!
   );
-  const [triggering, setTriggering] = useState(false);
-  const isUnlimited = UNLIMITED_MANUAL_RESEARCH_PLANS.has(planTier);
 
   function handleDrafted(
     listSetter: (updater: (prev: FindingRow[]) => FindingRow[]) => void,
@@ -552,53 +498,8 @@ export function AppResearchView({
     };
   }, [appId]);
 
-  async function handleRunResearch() {
-    setTriggering(true);
-    try {
-      const res = await fetch(`/api/apps/${appId}/research/trigger`, { method: "POST" });
-      const json = await res.json().catch(() => null);
-      if (!res.ok) {
-        toast.error(json?.error ?? "Failed to start research.");
-        if (typeof json?.retryAfter === "number") {
-          setCooldownHoursRemaining(json.retryAfter);
-        }
-        return;
-      }
-      toast.success("Research started — results will appear in a few minutes");
-      if (typeof json?.remaining === "number") {
-        setRemaining(json.remaining);
-      }
-      setCooldownHoursRemaining(6);
-    } catch {
-      toast.error("Failed to start research.");
-    } finally {
-      setTriggering(false);
-    }
-  }
-
-  const runState: ResearchRunState = {
-    remaining,
-    cooldownHoursRemaining,
-    isUnlimited,
-    triggering,
-    onRun: handleRunResearch,
-  };
-
   return (
     <div className="flex flex-col gap-5">
-      <Card>
-        <CardContent className="flex flex-wrap items-center justify-between gap-4">
-          <div>
-            <p className="text-sm font-semibold">Manual Research</p>
-            <p className="text-xs text-muted-foreground">
-              Run an extra scan for trending topics and user problems outside the weekly
-              schedule.
-            </p>
-          </div>
-          <RunResearchControl {...runState} />
-        </CardContent>
-      </Card>
-
       <div className={cn("flex gap-6 border-b")}>
         {TABS.map((item) => (
           <button
@@ -619,10 +520,15 @@ export function AppResearchView({
 
       {tab === "topics" &&
         (topics.length === 0 ? (
-          <ResearchEmptyState
-            firstResearchCompleted={firstResearchCompleted}
-            firstResearchCompletedAt={firstResearchCompletedAt}
-            runState={runState}
+          <AgentActionEmptyState
+            appId={appId}
+            actionType="topic_and_problem_research"
+            planTier={planTier}
+            agentCreditsUsedThisWeek={agentCreditsUsedThisWeek}
+            agentCreditsResetAt={agentCreditsResetAt}
+            lastAgentActionAt={lastAgentActionAt}
+            firstRun={{ completed: firstResearchCompleted, completedAt: firstResearchCompletedAt }}
+            nextRunAt={nextWeeklyResearchRun}
           />
         ) : (
           <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
@@ -640,10 +546,15 @@ export function AppResearchView({
 
       {tab === "problems" &&
         (problems.length === 0 ? (
-          <ResearchEmptyState
-            firstResearchCompleted={firstResearchCompleted}
-            firstResearchCompletedAt={firstResearchCompletedAt}
-            runState={runState}
+          <AgentActionEmptyState
+            appId={appId}
+            actionType="topic_and_problem_research"
+            planTier={planTier}
+            agentCreditsUsedThisWeek={agentCreditsUsedThisWeek}
+            agentCreditsResetAt={agentCreditsResetAt}
+            lastAgentActionAt={lastAgentActionAt}
+            firstRun={{ completed: firstResearchCompleted, completedAt: firstResearchCompletedAt }}
+            nextRunAt={nextWeeklyResearchRun}
           />
         ) : (
           <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
@@ -659,27 +570,56 @@ export function AppResearchView({
           </div>
         ))}
 
-      {tab === "competitors" &&
-        (competitors.length === 0 ? (
-          <ResearchEmptyState
-            firstResearchCompleted={firstResearchCompleted}
-            firstResearchCompletedAt={firstResearchCompletedAt}
-            runState={runState}
-            nextScanLabel="on the 1st of next month"
-          />
-        ) : (
-          <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-            {competitors.map((finding) => (
-              <CompetitorGapCard
-                key={finding.id}
-                appId={appId}
-                finding={finding}
-                draftedPlatforms={draftedPlatforms[finding.id] ?? []}
-                onDrafted={(platform) => handleDrafted(setCompetitors, finding.id, platform)}
-              />
-            ))}
-          </div>
-        ))}
+      {tab === "competitors" && (
+        <div className="flex flex-col gap-4">
+          {knownCompetitors.length > 0 && (
+            <Card>
+              <CardContent className="flex flex-col gap-2">
+                <p className="text-sm font-semibold">
+                  Tracking {knownCompetitors.length} competitor
+                  {knownCompetitors.length === 1 ? "" : "s"}
+                </p>
+                <div className="flex flex-wrap gap-2">
+                  {knownCompetitors.map((name) => (
+                    <Badge key={name} variant="outline">
+                      {name}
+                    </Badge>
+                  ))}
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  Gap cards below only appear once a genuine, groundable weakness is found for
+                  one of these — newer or niche competitors may not have public reviews yet.
+                </p>
+              </CardContent>
+            </Card>
+          )}
+
+          {competitors.length === 0 ? (
+            <AgentActionEmptyState
+              appId={appId}
+              actionType="competitor_gap_analysis"
+              planTier={planTier}
+              agentCreditsUsedThisWeek={agentCreditsUsedThisWeek}
+              agentCreditsResetAt={agentCreditsResetAt}
+              lastAgentActionAt={lastAgentActionAt}
+              firstRun={{ completed: firstResearchCompleted, completedAt: firstResearchCompletedAt }}
+              nextRunAt={nextCompetitorScanRun}
+            />
+          ) : (
+            <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+              {competitors.map((finding) => (
+                <CompetitorGapCard
+                  key={finding.id}
+                  appId={appId}
+                  finding={finding}
+                  draftedPlatforms={draftedPlatforms[finding.id] ?? []}
+                  onDrafted={(platform) => handleDrafted(setCompetitors, finding.id, platform)}
+                />
+              ))}
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }

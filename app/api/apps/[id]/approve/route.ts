@@ -3,16 +3,19 @@ import { NextResponse, type NextRequest } from "next/server";
 import { createServerClient } from "@supabase/auth-helpers-nextjs";
 import { tasks } from "@trigger.dev/sdk";
 import { supabaseAdmin } from "@/lib/supabase-server";
+import { withErrorHandling } from "@/lib/errors/apiHandler";
+import { ErrorMessages } from "@/lib/errors/messages";
+import { UnauthorizedError, ForbiddenError, NotFoundError, ValidationError } from "@/lib/errors/AppError";
 import type { contentGeneration } from "@/trigger/content-generation";
 import type { topicResearch } from "@/trigger/topic-research";
 import type { problemDiscovery } from "@/trigger/problem-discovery";
-import type { competitorGapAnalysis } from "@/trigger/competitor-gap-analysis";
+import type { forumOpportunityFinder } from "@/trigger/forum-opportunity-finder";
+import type { icpInference } from "@/trigger/icp-inference";
 
-export async function PATCH(
+export const PATCH = withErrorHandling(async (
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
-) {
-  try {
+) => {
     const { id } = await params;
 
     const cookieStore = await cookies();
@@ -38,10 +41,7 @@ export async function PATCH(
     } = await supabase.auth.getUser();
 
     if (!user) {
-      return NextResponse.json(
-        { error: "Unauthorized", code: "UNAUTHENTICATED" },
-        { status: 401 }
-      );
+      throw new UnauthorizedError(ErrorMessages.auth.UNAUTHORIZED);
     }
 
     const { data: membership } = await supabaseAdmin
@@ -53,10 +53,7 @@ export async function PATCH(
     const workspaceId = membership?.workspace_id as string | undefined;
 
     if (!workspaceId) {
-      return NextResponse.json(
-        { error: "No workspace found for this account.", code: "NO_WORKSPACE" },
-        { status: 403 }
-      );
+      throw new ForbiddenError(ErrorMessages.auth.NO_WORKSPACE, "NO_WORKSPACE");
     }
 
     const { data: app } = await supabaseAdmin
@@ -67,17 +64,11 @@ export async function PATCH(
       .single();
 
     if (!app) {
-      return NextResponse.json(
-        { error: "App not found.", code: "NOT_FOUND" },
-        { status: 404 }
-      );
+      throw new NotFoundError(ErrorMessages.apps.NOT_FOUND);
     }
 
     if (app.status !== "awaiting_approval") {
-      return NextResponse.json(
-        { error: "This app is not awaiting approval.", code: "INVALID_STATE" },
-        { status: 422 }
-      );
+      throw new ValidationError(ErrorMessages.apps.NOT_AWAITING_APPROVAL, "INVALID_STATE");
     }
 
     const { data: strategy, error: strategyError } = await supabaseAdmin
@@ -91,10 +82,7 @@ export async function PATCH(
       .maybeSingle();
 
     if (strategyError || !strategy) {
-      return NextResponse.json(
-        { error: "No draft strategy found to approve.", code: "NO_STRATEGY" },
-        { status: 422 }
-      );
+      throw new ValidationError(ErrorMessages.strategy.NO_DRAFT_TO_APPROVE, "NO_STRATEGY");
     }
 
     await supabaseAdmin
@@ -110,17 +98,24 @@ export async function PATCH(
       .eq("workspace_id", workspaceId);
 
     try {
-      await tasks.trigger<typeof contentGeneration>("content-generation", {
+      const handle = await tasks.trigger<typeof contentGeneration>("content-generation", {
         app_id: id,
         workspace_id: workspaceId,
       });
+      await supabaseAdmin
+        .from("apps")
+        .update({ pending_run_id: handle.id, pending_run_task: "content-generation" })
+        .eq("id", id)
+        .eq("workspace_id", workspaceId);
     } catch (err) {
       console.error("Failed to trigger content-generation:", err);
       await supabaseAdmin
         .from("apps")
         .update({
           status: "error",
-          error_message: "Failed to start content generation.",
+          error_message: ErrorMessages.apps.TRIGGER_CONTENT_GENERATION_FAILED,
+          pending_run_id: null,
+          pending_run_task: null,
         })
         .eq("id", id)
         .eq("workspace_id", workspaceId);
@@ -128,8 +123,11 @@ export async function PATCH(
 
     // Kick off the very first research run automatically so a new app has
     // findings within minutes instead of waiting for the next scheduled
-    // Sunday scan. Gated by first_research_completed so this never fires
-    // again — not on a later approval after re-analysis, not ever.
+    // weekly scan. Gated by first_research_completed so this never fires
+    // again — not on a later approval after re-analysis, not ever. Topics,
+    // Problems, and Opportunities all fire together here since all three
+    // are weekly-cadence streams; Competitor Gap Analysis stays out of this
+    // burst since it's monthly-cadence, not part of immediate onboarding.
     if (!app.first_research_completed) {
       try {
         const researchPayload = {
@@ -140,7 +138,7 @@ export async function PATCH(
         await Promise.all([
           tasks.trigger<typeof topicResearch>("topic-research", researchPayload),
           tasks.trigger<typeof problemDiscovery>("problem-discovery", researchPayload),
-          tasks.trigger<typeof competitorGapAnalysis>("competitor-gap-analysis", {
+          tasks.trigger<typeof forumOpportunityFinder>("forum-opportunity-finder", {
             app_id: id,
             workspace_id: workspaceId,
           }),
@@ -159,12 +157,22 @@ export async function PATCH(
         .eq("workspace_id", workspaceId);
     }
 
+    // Outreach onboarding (PHASES.md Notes Log, 2026-07-14): icp-inference
+    // fires alongside the research burst above so the founder has an ICP
+    // summary + prospect previews waiting by the time they check the
+    // Outreach tab. Not gated by first_research_completed — icp-inference
+    // has its own idempotency via icp_status/first_outreach_completed, and
+    // outreach-preview itself replaces any prior preview batch, so this is
+    // safe to fire on every approval (including after a later re-analysis)
+    // rather than only the very first one.
+    try {
+      await tasks.trigger<typeof icpInference>("icp-inference", {
+        app_id: id,
+        workspace_id: workspaceId,
+      });
+    } catch (err) {
+      console.error("Failed to trigger icp-inference:", err);
+    }
+
     return NextResponse.json({ success: true }, { status: 200 });
-  } catch (error) {
-    console.error("PATCH /api/apps/[id]/approve error:", error);
-    return NextResponse.json(
-      { error: "Something went wrong. Please try again.", code: "SERVER_ERROR" },
-      { status: 500 }
-    );
-  }
-}
+});

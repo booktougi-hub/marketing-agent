@@ -1,9 +1,13 @@
 import { logger, schemaTask } from "@trigger.dev/sdk";
 import OpenAI from "openai";
-import Anthropic from "@anthropic-ai/sdk";
+import type Anthropic from "@anthropic-ai/sdk";
 import { z } from "zod";
 import { supabaseAdmin } from "@/lib/supabase-server";
 import { buildDevtoSystemPrompt, buildRealLinksBlock } from "@/lib/devto-article";
+import { handleJobError } from "@/lib/errors/jobErrorHandler";
+import { callExternalService, ExternalServiceError } from "@/lib/errors/AppError";
+import { ErrorMessages } from "@/lib/errors/messages";
+import { createAnthropicClient } from "@/lib/anthropic-client";
 import type { AppDna, StrategyContentPillar } from "@/types";
 
 // Routes across whichever free-tier models currently have capacity, instead
@@ -90,14 +94,19 @@ async function generatePosts(
 ) {
   logger.info(`content-generation: generating ${platform} posts`, { count });
 
-  const completion = await openrouter.chat.completions.create({
-    model: OPENROUTER_MODEL,
-    max_tokens: MAX_TOKENS_BY_PLATFORM[platform],
-    messages: [
-      { role: "system", content: buildSystemPrompt(platform, count) },
-      { role: "user", content: contextBlock },
-    ],
-  });
+  const completion = await callExternalService(
+    "openrouter",
+    ErrorMessages.external.OPENROUTER_FAILED,
+    () =>
+      openrouter.chat.completions.create({
+        model: OPENROUTER_MODEL,
+        max_tokens: MAX_TOKENS_BY_PLATFORM[platform],
+        messages: [
+          { role: "system", content: buildSystemPrompt(platform, count) },
+          { role: "user", content: contextBlock },
+        ],
+      })
+  );
 
   const finishReason = completion.choices[0]?.finish_reason;
   let responseText = completion.choices[0]?.message?.content ?? "";
@@ -115,11 +124,7 @@ async function generatePosts(
       raw_response: responseText.slice(0, 2000),
       error: err instanceof Error ? err.message : String(err),
     });
-    const truncationHint =
-      finishReason === "length" ? " (response was truncated — hit the token limit)" : "";
-    throw new Error(
-      `${platform} generation returned unparseable output${truncationHint}: ${err instanceof Error ? err.message : String(err)}`
-    );
+    throw new ExternalServiceError(ErrorMessages.external.OPENROUTER_FAILED, "openrouter");
   }
 
   logger.info(`content-generation: ${platform} posts generated`, {
@@ -172,14 +177,16 @@ async function generateDevtoArticles(
   // couple of times per job, so there's no rate-limit pressure to justify
   // the added complexity of parallelizing.
   for (const pillar of selectedPillars) {
-    const message = await anthropic.messages.create({
-      model: CLAUDE_MODEL,
-      max_tokens: DEVTO_MAX_TOKENS,
-      system: systemPrompt,
-      messages: [
-        { role: "user", content: buildDevtoUserPrompt(dna, additionalContext, pillar, realLinks) },
-      ],
-    });
+    const message = await callExternalService("claude", ErrorMessages.external.CLAUDE_FAILED, () =>
+      anthropic.messages.create({
+        model: CLAUDE_MODEL,
+        max_tokens: DEVTO_MAX_TOKENS,
+        system: systemPrompt,
+        messages: [
+          { role: "user", content: buildDevtoUserPrompt(dna, additionalContext, pillar, realLinks) },
+        ],
+      })
+    );
 
     const body = message.content
       .filter((block) => block.type === "text")
@@ -191,7 +198,7 @@ async function generateDevtoArticles(
       .trim();
 
     if (!body) {
-      throw new Error(`Devto article generation for pillar "${pillar.name}" returned empty output.`);
+      throw new ExternalServiceError(ErrorMessages.external.CLAUDE_FAILED, "claude");
     }
 
     articles.push({ pillar: pillar.name, body });
@@ -216,8 +223,14 @@ export const contentGeneration = schemaTask({
         // Free-tier OpenRouter models rate-limit aggressively; the SDK's
         // default of 2 retries isn't enough headroom, so give it more.
         maxRetries: 6,
+        // SDK default is a 10-minute timeout per attempt — with maxRetries
+        // raised to 6 that's a 60-minute worst case for one call if a
+        // request ever genuinely hangs instead of failing fast. 60s is
+        // generous for these prompts; 6 retries on top is still bounded to
+        // 6 minutes worst case instead of 60.
+        timeout: 60_000,
       });
-      const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY! });
+      const anthropic = createAnthropicClient();
 
       const { data: app, error: appError } = await supabaseAdmin
         .from("apps")
@@ -332,22 +345,15 @@ ${strategy.tone}`;
 
       logger.info("content-generation: content saved", { count: rows.length });
 
-      return { app_id, posts_created: rows.length };
-    } catch (err) {
-      const message = err instanceof Error ? err.message : "Content generation failed.";
-      logger.error("content-generation failed", {
-        app_id,
-        workspace_id,
-        error: message,
-        stack: err instanceof Error ? err.stack : undefined,
-      });
-
       await supabaseAdmin
         .from("apps")
-        .update({ status: "error", error_message: message })
+        .update({ pending_run_id: null, pending_run_task: null })
         .eq("id", app_id)
         .eq("workspace_id", workspace_id);
 
+      return { app_id, posts_created: rows.length };
+    } catch (err) {
+      await handleJobError(err, { appId: app_id, workspaceId: workspace_id, jobName: "content-generation" });
       throw err;
     }
   },

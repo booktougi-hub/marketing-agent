@@ -5,9 +5,19 @@ import { ArrowRight, ChevronDown, Flag, Loader2 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
+import { AgentActionEmptyState } from "@/components/apps/agent-action-empty-state";
+import { OutreachIcpOnboarding } from "@/components/apps/outreach-icp-onboarding";
 import { cn } from "@/lib/utils";
 import { formatTimeAgo } from "@/lib/time";
-import type { ColdEmailProspect, EmailInteraction, EmailType, ProspectStatus } from "@/types";
+import type {
+  ColdEmailProspect,
+  EmailInteraction,
+  EmailType,
+  IcpData,
+  IcpStatus,
+  PlanTier,
+  ProspectStatus,
+} from "@/types";
 
 type OutreachTab = "prospects" | "sequences" | "replies";
 
@@ -108,13 +118,14 @@ function MetricTile({ label, value }: { label: string; value: number }) {
   );
 }
 
-function ProspectCard({
+export function ProspectCard({
   prospect,
   expanded,
   approving,
   error,
   onToggleExpand,
   onApprove,
+  readOnly = false,
 }: {
   prospect: ColdEmailProspect;
   expanded: boolean;
@@ -122,6 +133,9 @@ function ProspectCard({
   error?: string;
   onToggleExpand: () => void;
   onApprove: () => void;
+  // Preview prospects (is_preview) aren't a sendable batch yet — no
+  // Approve/Skip actions, just the card and its drafted email.
+  readOnly?: boolean;
 }) {
   const hasDraft = Boolean(prospect.personalised_email);
 
@@ -173,7 +187,7 @@ function ProspectCard({
             View Email
           </Button>
 
-          {prospect.status === "personalised" && (
+          {!readOnly && prospect.status === "personalised" && (
             <Button type="button" size="sm" disabled={approving} onClick={onApprove}>
               {approving && <Loader2 className="animate-spin" />}
               Approve
@@ -197,10 +211,18 @@ function ProspectsTab({
   appId,
   prospects,
   onProspectUpdate,
+  planTier,
+  agentCreditsUsedThisWeek,
+  agentCreditsResetAt,
+  lastAgentActionAt,
 }: {
   appId: string;
   prospects: ColdEmailProspect[];
   onProspectUpdate: (prospectId: string, patch: Partial<ColdEmailProspect>) => void;
+  planTier: PlanTier;
+  agentCreditsUsedThisWeek: number;
+  agentCreditsResetAt: string | null;
+  lastAgentActionAt: string | null;
 }) {
   const [statusFilter, setStatusFilter] = useState<"all" | ProspectStatus>("all");
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
@@ -264,7 +286,15 @@ function ProspectsTab({
 
   if (prospects.length === 0) {
     return (
-      <EmptyState message="No prospects yet. Prospects will appear here once Apollo research finds contacts for your app." />
+      <AgentActionEmptyState
+        appId={appId}
+        actionType="cold_email_prospecting"
+        planTier={planTier}
+        agentCreditsUsedThisWeek={agentCreditsUsedThisWeek}
+        agentCreditsResetAt={agentCreditsResetAt}
+        lastAgentActionAt={lastAgentActionAt}
+        nextRunAt={null}
+      />
     );
   }
 
@@ -542,14 +572,34 @@ export function AppOutreachView({
   appId,
   initialProspects,
   initialInteractions,
+  planTier,
+  agentCreditsUsedThisWeek,
+  agentCreditsResetAt,
+  lastAgentActionAt,
+  initialIcpData,
+  initialIcpStatus,
+  firstOutreachCompleted,
 }: {
   appId: string;
   initialProspects: ColdEmailProspect[];
   initialInteractions: EmailInteraction[];
+  planTier: PlanTier;
+  agentCreditsUsedThisWeek: number;
+  agentCreditsResetAt: string | null;
+  lastAgentActionAt: string | null;
+  initialIcpData: IcpData | null;
+  initialIcpStatus: IcpStatus;
+  firstOutreachCompleted: boolean;
 }) {
   const [tab, setTab] = useState<OutreachTab>("prospects");
   const [prospects, setProspects] = useState(initialProspects);
   const [interactions, setInteractions] = useState(initialInteractions);
+  // Once true (via onApproved below), permanently shows the regular tabs —
+  // the preview prospects are already part of `prospects` (page.tsx's query
+  // has no is_preview filter), so they just display normally from here on.
+  const [showOnboarding, setShowOnboarding] = useState(
+    firstOutreachCompleted && initialIcpStatus !== "approved"
+  );
 
   const prospectById = useMemo(
     () => new Map(prospects.map((p) => [p.id, p])),
@@ -594,13 +644,26 @@ export function AppOutreachView({
         ))}
       </div>
 
-      {tab === "prospects" && (
-        <ProspectsTab
-          appId={appId}
-          prospects={prospects}
-          onProspectUpdate={updateProspect}
-        />
-      )}
+      {tab === "prospects" &&
+        (showOnboarding ? (
+          <OutreachIcpOnboarding
+            appId={appId}
+            initialIcpData={initialIcpData}
+            initialIcpStatus={initialIcpStatus}
+            initialPreviewProspects={prospects.filter((p) => p.is_preview)}
+            onApproved={() => setShowOnboarding(false)}
+          />
+        ) : (
+          <ProspectsTab
+            appId={appId}
+            prospects={prospects}
+            onProspectUpdate={updateProspect}
+            planTier={planTier}
+            agentCreditsUsedThisWeek={agentCreditsUsedThisWeek}
+            agentCreditsResetAt={agentCreditsResetAt}
+            lastAgentActionAt={lastAgentActionAt}
+          />
+        ))}
       {tab === "sequences" && (
         <SequencesTab prospectById={prospectById} interactions={interactions} />
       )}

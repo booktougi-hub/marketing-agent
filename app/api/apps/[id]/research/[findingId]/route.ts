@@ -3,16 +3,18 @@ import { NextResponse, type NextRequest } from "next/server";
 import { createServerClient } from "@supabase/auth-helpers-nextjs";
 import { z } from "zod";
 import { supabaseAdmin } from "@/lib/supabase-server";
+import { withErrorHandling } from "@/lib/errors/apiHandler";
+import { ErrorMessages } from "@/lib/errors/messages";
+import { UnauthorizedError, ForbiddenError, NotFoundError, ValidationError, InternalError } from "@/lib/errors/AppError";
 
 const patchSchema = z.object({
   status: z.literal("acted_on"),
 });
 
-export async function PATCH(
+export const PATCH = withErrorHandling(async (
   request: NextRequest,
   { params }: { params: Promise<{ id: string; findingId: string }> }
-) {
-  try {
+) => {
     const { id, findingId } = await params;
 
     const cookieStore = await cookies();
@@ -38,10 +40,7 @@ export async function PATCH(
     } = await supabase.auth.getUser();
 
     if (!user) {
-      return NextResponse.json(
-        { error: "Unauthorized", code: "UNAUTHENTICATED" },
-        { status: 401 }
-      );
+      throw new UnauthorizedError(ErrorMessages.auth.UNAUTHORIZED);
     }
 
     const { data: membership } = await supabaseAdmin
@@ -53,20 +52,14 @@ export async function PATCH(
     const workspaceId = membership?.workspace_id as string | undefined;
 
     if (!workspaceId) {
-      return NextResponse.json(
-        { error: "No workspace found for this account.", code: "NO_WORKSPACE" },
-        { status: 403 }
-      );
+      throw new ForbiddenError(ErrorMessages.auth.NO_WORKSPACE, "NO_WORKSPACE");
     }
 
     const json = await request.json().catch(() => null);
     const parsed = patchSchema.safeParse(json);
 
     if (!parsed.success) {
-      return NextResponse.json(
-        { error: "Invalid request body.", code: "VALIDATION_ERROR" },
-        { status: 422 }
-      );
+      throw new ValidationError(ErrorMessages.generic.INVALID_REQUEST_BODY);
     }
 
     const { data: existing } = await supabaseAdmin
@@ -78,10 +71,7 @@ export async function PATCH(
       .single();
 
     if (!existing) {
-      return NextResponse.json(
-        { error: "Finding not found.", code: "NOT_FOUND" },
-        { status: 404 }
-      );
+      throw new NotFoundError(ErrorMessages.research.FINDING_NOT_FOUND);
     }
 
     const { data: updated, error: updateError } = await supabaseAdmin
@@ -94,18 +84,8 @@ export async function PATCH(
       .single();
 
     if (updateError || !updated) {
-      return NextResponse.json(
-        { error: "Failed to update finding.", code: "SERVER_ERROR" },
-        { status: 500 }
-      );
+      throw new InternalError(ErrorMessages.research.FINDING_UPDATE_FAILED);
     }
 
     return NextResponse.json({ finding: updated }, { status: 200 });
-  } catch (error) {
-    console.error("PATCH /api/apps/[id]/research/[findingId] error:", error);
-    return NextResponse.json(
-      { error: "Something went wrong. Please try again.", code: "SERVER_ERROR" },
-      { status: 500 }
-    );
-  }
-}
+});

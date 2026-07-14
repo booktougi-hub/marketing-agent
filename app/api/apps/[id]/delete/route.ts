@@ -3,16 +3,18 @@ import { NextResponse, type NextRequest } from "next/server";
 import { createServerClient } from "@supabase/auth-helpers-nextjs";
 import { z } from "zod";
 import { supabaseAdmin } from "@/lib/supabase-server";
+import { withErrorHandling } from "@/lib/errors/apiHandler";
+import { ErrorMessages } from "@/lib/errors/messages";
+import { UnauthorizedError, ForbiddenError, NotFoundError, ValidationError, InternalError } from "@/lib/errors/AppError";
 
 const postSchema = z.object({
   confirm_name: z.string().trim().min(1, "Confirmation text is required."),
 });
 
-export async function POST(
+export const POST = withErrorHandling(async (
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
-) {
-  try {
+) => {
     const { id } = await params;
 
     const cookieStore = await cookies();
@@ -38,10 +40,7 @@ export async function POST(
     } = await supabase.auth.getUser();
 
     if (!user) {
-      return NextResponse.json(
-        { error: "Unauthorized", code: "UNAUTHENTICATED" },
-        { status: 401 }
-      );
+      throw new UnauthorizedError(ErrorMessages.auth.UNAUTHORIZED);
     }
 
     const { data: membership } = await supabaseAdmin
@@ -53,23 +52,14 @@ export async function POST(
     const workspaceId = membership?.workspace_id as string | undefined;
 
     if (!workspaceId) {
-      return NextResponse.json(
-        { error: "No workspace found for this account.", code: "NO_WORKSPACE" },
-        { status: 403 }
-      );
+      throw new ForbiddenError(ErrorMessages.auth.NO_WORKSPACE, "NO_WORKSPACE");
     }
 
     const json = await request.json().catch(() => null);
     const parsed = postSchema.safeParse(json);
 
     if (!parsed.success) {
-      return NextResponse.json(
-        {
-          error: parsed.error.issues[0]?.message ?? "Invalid request body.",
-          code: "VALIDATION_ERROR",
-        },
-        { status: 422 }
-      );
+      throw new ValidationError(parsed.error.issues[0]?.message ?? ErrorMessages.generic.INVALID_REQUEST_BODY);
     }
 
     const { data: app } = await supabaseAdmin
@@ -80,18 +70,12 @@ export async function POST(
       .single();
 
     if (!app || app.deleted_at) {
-      return NextResponse.json(
-        { error: "App not found.", code: "NOT_FOUND" },
-        { status: 404 }
-      );
+      throw new NotFoundError(ErrorMessages.apps.NOT_FOUND);
     }
 
     const expectedConfirmation = app.name || app.source_url;
     if (parsed.data.confirm_name !== expectedConfirmation) {
-      return NextResponse.json(
-        { error: "Confirmation text does not match the app name.", code: "VALIDATION_ERROR" },
-        { status: 422 }
-      );
+      throw new ValidationError(ErrorMessages.apps.DELETE_CONFIRMATION_MISMATCH);
     }
 
     const { error: updateError } = await supabaseAdmin
@@ -101,18 +85,8 @@ export async function POST(
       .eq("workspace_id", workspaceId);
 
     if (updateError) {
-      return NextResponse.json(
-        { error: "Failed to delete app.", code: "SERVER_ERROR" },
-        { status: 500 }
-      );
+      throw new InternalError(ErrorMessages.apps.DELETE_FAILED);
     }
 
     return NextResponse.json({ success: true }, { status: 200 });
-  } catch (error) {
-    console.error("POST /api/apps/[id]/delete error:", error);
-    return NextResponse.json(
-      { error: "Something went wrong. Please try again.", code: "SERVER_ERROR" },
-      { status: 500 }
-    );
-  }
-}
+});

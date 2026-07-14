@@ -14,6 +14,8 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { ToggleSwitch } from "@/components/ui/toggle-switch";
+import { ErrorMessage } from "@/components/shared/ErrorMessage";
+import { parseApiError } from "@/lib/errors/parseApiError";
 import { cn } from "@/lib/utils";
 import {
   DEVTO_FREQUENCY_OPTIONS,
@@ -179,9 +181,9 @@ export function PublishingScheduleSection({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ publishing_schedule: schedule }),
       });
-      const json = await res.json().catch(() => null);
       if (!res.ok) {
-        setError(json?.error ?? "Failed to save changes.");
+        const { message } = await parseApiError(res);
+        setError(message);
         return;
       }
       setSuccess(true);
@@ -280,7 +282,7 @@ export function PublishingScheduleSection({
           />
         </div>
 
-        {error && <p className="text-sm text-destructive">{error}</p>}
+        {error && <ErrorMessage message={error} />}
         {success && <p className="text-sm text-muted-foreground">Saved.</p>}
 
         <div className="flex justify-end border-t pt-4">

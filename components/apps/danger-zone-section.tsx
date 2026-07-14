@@ -17,6 +17,8 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { ToggleSwitch } from "@/components/ui/toggle-switch";
+import { ErrorMessage } from "@/components/shared/ErrorMessage";
+import { parseApiError } from "@/lib/errors/parseApiError";
 
 export function DangerZoneSection({
   appId,
@@ -48,9 +50,9 @@ export function DangerZoneSection({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ is_paused: next }),
       });
-      const json = await res.json().catch(() => null);
       if (!res.ok) {
-        toast.error(json?.error ?? "Failed to update pause state.");
+        const { message } = await parseApiError(res);
+        toast.error(message);
         return;
       }
       setIsPaused(next);
@@ -79,9 +81,9 @@ export function DangerZoneSection({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ confirm_name: confirmText }),
       });
-      const json = await res.json().catch(() => null);
       if (!res.ok) {
-        setDeleteError(json?.error ?? "Failed to delete app.");
+        const { message } = await parseApiError(res);
+        setDeleteError(message);
         return;
       }
       router.push("/dashboard/apps");
@@ -148,7 +150,7 @@ export function DangerZoneSection({
               onChange={(e) => setConfirmText(e.target.value)}
               autoComplete="off"
             />
-            {deleteError && <p className="text-sm text-destructive">{deleteError}</p>}
+            {deleteError && <ErrorMessage message={deleteError} />}
           </div>
 
           <DialogFooter>

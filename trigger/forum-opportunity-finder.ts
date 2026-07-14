@@ -2,6 +2,7 @@ import { logger, schemaTask } from "@trigger.dev/sdk";
 import { z } from "zod";
 import { runResearchStream } from "@/lib/research-job";
 import { supabaseAdmin } from "@/lib/supabase-server";
+import { handleJobError } from "@/lib/errors/jobErrorHandler";
 
 const payloadSchema = z.object({
   app_id: z.string(),
@@ -101,9 +102,12 @@ export const forumOpportunityFinder = schemaTask({
 
       return result;
     } catch (err) {
-      const message =
-        err instanceof Error ? err.message : "forum-opportunity-finder failed unexpectedly.";
-      logger.error("forum-opportunity-finder failed", { app_id, workspace_id, error: message });
+      await handleJobError(err, {
+        appId: app_id,
+        workspaceId: workspace_id,
+        jobName: "forum-opportunity-finder",
+        updateAppStatus: false,
+      });
       throw err;
     }
   },

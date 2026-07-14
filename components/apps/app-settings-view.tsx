@@ -10,7 +10,7 @@ import { ConnectedPlatformsSection } from "@/components/apps/connected-platforms
 import { DangerZoneSection } from "@/components/apps/danger-zone-section";
 import { cn } from "@/lib/utils";
 import type { PublishingScheduleSettings } from "@/lib/app-settings";
-import type { AppStatus, ContentPlatform, PlanTier, ProductType } from "@/types";
+import type { AppStatus, ContentPlatform, PlanTier, ProductType, ResearchDay } from "@/types";
 
 interface SettingsSection {
   id: string;
@@ -81,6 +81,10 @@ export function AppSettingsView({
   isPaused,
   appStatus,
   nextScheduledContent,
+  agentCreditsUsedThisWeek,
+  agentCreditsResetAt,
+  preferredResearchDay,
+  preferredResearchHour,
 }: {
   appId: string;
   appName: string | null;
@@ -96,6 +100,10 @@ export function AppSettingsView({
   isPaused: boolean;
   appStatus: AppStatus;
   nextScheduledContent: { scheduledAt: string; platform: ContentPlatform } | null;
+  agentCreditsUsedThisWeek: number;
+  agentCreditsResetAt: string | null;
+  preferredResearchDay: ResearchDay;
+  preferredResearchHour: number;
 }) {
   const [activeSection, setActiveSection] = useState(SECTIONS[0].id);
   const navRef = useRef<HTMLDivElement | null>(null);
@@ -177,8 +185,14 @@ export function AppSettingsView({
                 <PublishingScheduleSection appId={appId} initialSchedule={publishingSchedule} />
               ) : section.id === "research-schedule" ? (
                 <ResearchScheduleSection
+                  appId={appId}
                   appStatus={appStatus}
                   nextScheduledContent={nextScheduledContent}
+                  planTier={planTier}
+                  agentCreditsUsedThisWeek={agentCreditsUsedThisWeek}
+                  agentCreditsResetAt={agentCreditsResetAt}
+                  initialPreferredResearchDay={preferredResearchDay}
+                  initialPreferredResearchHour={preferredResearchHour}
                 />
               ) : section.id === "connected-platforms" ? (
                 <ConnectedPlatformsSection appId={appId} initialDevtoConnected={devtoConnected} />

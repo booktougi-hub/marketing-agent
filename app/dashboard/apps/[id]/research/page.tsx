@@ -4,7 +4,7 @@ import { createServerClient } from "@supabase/auth-helpers-nextjs";
 import { AppResearchView } from "@/components/apps/app-research-view";
 import { supabaseAdmin } from "@/lib/supabase-server";
 import { getLatestMonthRows, getLatestWeekRows } from "@/lib/research";
-import type { ContentPlatform, PlanTier, ResearchFinding } from "@/types";
+import type { AppDna, ContentPlatform, PlanTier, ResearchDay, ResearchFinding } from "@/types";
 
 type FindingRow = Pick<ResearchFinding, "id" | "findings" | "status" | "week_of" | "created_at">;
 
@@ -55,7 +55,7 @@ export default async function AppResearchPage({
     supabaseAdmin
       .from("apps")
       .select(
-        "id, name, source_url, manual_research_count_this_week, manual_research_reset_at, last_manual_research_at, first_research_completed, first_research_completed_at"
+        "id, name, source_url, dna, agent_credits_used_this_week, agent_credits_reset_at, last_agent_action_at, first_research_completed, first_research_completed_at, preferred_research_day, preferred_research_hour"
       )
       .eq("id", id)
       .eq("workspace_id", workspaceId)
@@ -101,6 +101,7 @@ export default async function AppResearchPage({
   const topics = getLatestWeekRows((topicRows ?? []) as FindingRow[]);
   const problems = (problemRows ?? []) as FindingRow[];
   const competitors = getLatestMonthRows((competitorRows ?? []) as FindingRow[]);
+  const knownCompetitors = ((app.dna as AppDna | null)?.competitors ?? []).filter(Boolean);
 
   // Which platforms already have a draft generated from each finding — lets
   // the Research page's per-platform draft buttons show "already drafted"
@@ -127,13 +128,16 @@ export default async function AppResearchPage({
         initialTopics={topics}
         initialProblems={problems}
         initialCompetitors={competitors}
+        knownCompetitors={knownCompetitors}
         initialDraftedPlatforms={draftedPlatformsByFinding}
         planTier={(workspace?.plan_tier ?? "free") as PlanTier}
-        manualResearchCountThisWeek={app.manual_research_count_this_week}
-        manualResearchResetAt={app.manual_research_reset_at}
-        lastManualResearchAt={app.last_manual_research_at}
+        agentCreditsUsedThisWeek={app.agent_credits_used_this_week}
+        agentCreditsResetAt={app.agent_credits_reset_at}
+        lastAgentActionAt={app.last_agent_action_at}
         firstResearchCompleted={app.first_research_completed}
         firstResearchCompletedAt={app.first_research_completed_at}
+        preferredResearchDay={app.preferred_research_day as ResearchDay}
+        preferredResearchHour={app.preferred_research_hour}
       />
     </div>
   );

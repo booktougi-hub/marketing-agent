@@ -4,7 +4,7 @@ import { createServerClient } from "@supabase/auth-helpers-nextjs";
 import { AppSettingsView } from "@/components/apps/app-settings-view";
 import { supabaseAdmin } from "@/lib/supabase-server";
 import { parsePublishingSchedule } from "@/lib/app-settings";
-import type { AppStatus, PlanTier } from "@/types";
+import type { AppStatus, PlanTier, ResearchDay } from "@/types";
 
 export default async function AppSettingsPage({
   params,
@@ -54,7 +54,7 @@ export default async function AppSettingsPage({
       supabaseAdmin
         .from("apps")
         .select(
-          "id, name, source_url, product_type, additional_context, url_changed_at, reanalysis_credits_used, reanalysis_credits_reset_at, app_settings, is_paused, status"
+          "id, name, source_url, product_type, additional_context, url_changed_at, reanalysis_credits_used, reanalysis_credits_reset_at, app_settings, is_paused, status, agent_credits_used_this_week, agent_credits_reset_at, preferred_research_day, preferred_research_hour"
         )
         .eq("id", id)
         .eq("workspace_id", workspaceId)
@@ -103,6 +103,10 @@ export default async function AppSettingsPage({
           ? { scheduledAt: nextContent.scheduled_at, platform: nextContent.platform }
           : null
       }
+      agentCreditsUsedThisWeek={app.agent_credits_used_this_week}
+      agentCreditsResetAt={app.agent_credits_reset_at}
+      preferredResearchDay={app.preferred_research_day as ResearchDay}
+      preferredResearchHour={app.preferred_research_hour}
     />
   );
 }

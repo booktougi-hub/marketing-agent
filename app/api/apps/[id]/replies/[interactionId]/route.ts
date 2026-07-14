@@ -3,16 +3,25 @@ import { NextResponse, type NextRequest } from "next/server";
 import { createServerClient } from "@supabase/auth-helpers-nextjs";
 import { z } from "zod";
 import { supabaseAdmin } from "@/lib/supabase-server";
+import { withErrorHandling } from "@/lib/errors/apiHandler";
+import { ErrorMessages } from "@/lib/errors/messages";
+import { UnauthorizedError, ForbiddenError, NotFoundError, ValidationError, InternalError } from "@/lib/errors/AppError";
 
 const patchSchema = z.object({
   actioned: z.boolean(),
 });
 
-export async function PATCH(
+// This route only marks an existing reply as handled (actioned_at) — it
+// never writes replied_at itself. There is currently no code path anywhere
+// that sets email_interactions.replied_at (that requires the Instantly.ai
+// reply webhook, V3 scope, not built yet). Once that exists, call
+// lib/first-reply-alert.ts's checkAndSendFirstReplyAlert() right after that
+// write — see that file for why it's not wired up here.
+
+export const PATCH = withErrorHandling(async (
   request: NextRequest,
   { params }: { params: Promise<{ id: string; interactionId: string }> }
-) {
-  try {
+) => {
     const { id, interactionId } = await params;
 
     const cookieStore = await cookies();
@@ -38,10 +47,7 @@ export async function PATCH(
     } = await supabase.auth.getUser();
 
     if (!user) {
-      return NextResponse.json(
-        { error: "Unauthorized", code: "UNAUTHENTICATED" },
-        { status: 401 }
-      );
+      throw new UnauthorizedError(ErrorMessages.auth.UNAUTHORIZED);
     }
 
     const { data: membership } = await supabaseAdmin
@@ -53,20 +59,14 @@ export async function PATCH(
     const workspaceId = membership?.workspace_id as string | undefined;
 
     if (!workspaceId) {
-      return NextResponse.json(
-        { error: "No workspace found for this account.", code: "NO_WORKSPACE" },
-        { status: 403 }
-      );
+      throw new ForbiddenError(ErrorMessages.auth.NO_WORKSPACE, "NO_WORKSPACE");
     }
 
     const json = await request.json().catch(() => null);
     const parsed = patchSchema.safeParse(json);
 
     if (!parsed.success) {
-      return NextResponse.json(
-        { error: "Invalid request body.", code: "VALIDATION_ERROR" },
-        { status: 422 }
-      );
+      throw new ValidationError(ErrorMessages.generic.INVALID_REQUEST_BODY);
     }
 
     const { data: existing } = await supabaseAdmin
@@ -78,17 +78,11 @@ export async function PATCH(
       .single();
 
     if (!existing) {
-      return NextResponse.json(
-        { error: "Reply not found.", code: "NOT_FOUND" },
-        { status: 404 }
-      );
+      throw new NotFoundError(ErrorMessages.prospects.REPLY_NOT_FOUND);
     }
 
     if (!existing.replied_at) {
-      return NextResponse.json(
-        { error: "This interaction is not a reply.", code: "INVALID_STATE" },
-        { status: 422 }
-      );
+      throw new ValidationError(ErrorMessages.prospects.REPLY_INVALID_STATE, "INVALID_STATE");
     }
 
     const { data: updated, error: updateError } = await supabaseAdmin
@@ -101,18 +95,8 @@ export async function PATCH(
       .single();
 
     if (updateError || !updated) {
-      return NextResponse.json(
-        { error: "Failed to update reply.", code: "SERVER_ERROR" },
-        { status: 500 }
-      );
+      throw new InternalError(ErrorMessages.prospects.REPLY_UPDATE_FAILED);
     }
 
     return NextResponse.json({ interaction: updated }, { status: 200 });
-  } catch (error) {
-    console.error("PATCH /api/apps/[id]/replies/[interactionId] error:", error);
-    return NextResponse.json(
-      { error: "Something went wrong. Please try again.", code: "SERVER_ERROR" },
-      { status: 500 }
-    );
-  }
-}
+});

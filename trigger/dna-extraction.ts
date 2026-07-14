@@ -1,11 +1,14 @@
 import { logger, schemaTask, tasks } from "@trigger.dev/sdk";
-import Anthropic from "@anthropic-ai/sdk";
-import FirecrawlApp from "@mendable/firecrawl-js";
 import mammoth from "mammoth";
 import { PDFParse } from "pdf-parse";
 import { z } from "zod";
 import { supabaseAdmin } from "@/lib/supabase-server";
 import { resolveAppIconUrl } from "@/lib/favicon";
+import { handleJobError } from "@/lib/errors/jobErrorHandler";
+import { callExternalService, ExternalServiceError } from "@/lib/errors/AppError";
+import { ErrorMessages } from "@/lib/errors/messages";
+import { createAnthropicClient } from "@/lib/anthropic-client";
+import { createFirecrawlClient, SCRAPE_TIMEOUT_MS } from "@/lib/firecrawl-client";
 import type { strategyGeneration } from "@/trigger/strategy-generation";
 
 const CLAUDE_MODEL = "claude-sonnet-5";
@@ -28,11 +31,17 @@ const dnaSchema = z.object({
   competitors: z.array(z.string()),
   tone: z.enum(["casual", "professional", "technical"]),
   additional_urls: z.array(z.string()),
+  app_store_urls: z.object({
+    play_store: z.string().nullable(),
+    app_store: z.string().nullable(),
+  }),
 });
 
 const SYSTEM_PROMPT = `You are extracting a structured "DNA" profile for a software product from raw source material.
 
 You may receive content from multiple sources: the app website, additional context provided by the developer, and supporting documents. Use all sources together to extract the most accurate and complete information.
+
+Many sites are landing/marketing pages whose actual product is a mobile app — look for "Get it on Google Play" / "Download on the App Store" badges or links to play.google.com or apps.apple.com anywhere in the content, even if the page otherwise reads like a normal website. This matters regardless of what the developer may have labeled the product as — a page can be a mobile app's marketing site even when nothing else about it looks like one.
 
 Respond with ONLY a JSON object matching this exact shape — no prose, no markdown code fences:
 {
@@ -44,7 +53,8 @@ Respond with ONLY a JSON object matching this exact shape — no prose, no markd
   "pricing": string,
   "competitors": string[],
   "tone": "casual" | "professional" | "technical",
-  "additional_urls": string[]
+  "additional_urls": string[],
+  "app_store_urls": { "play_store": string | null, "app_store": string | null }  // the actual URLs found in the content, or null if that store isn't linked — never invent a URL that isn't present in the source material
 }`;
 
 function getExtension(path: string) {
@@ -105,15 +115,20 @@ export const dnaExtraction = schemaTask({
     logger.info("dna-extraction: run started", { app_id, workspace_id, source_url });
 
     try {
-      const firecrawl = new FirecrawlApp({ apiKey: process.env.FIRECRAWL_API_KEY! });
-      const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY! });
+      const firecrawl = createFirecrawlClient();
+      const anthropic = createAnthropicClient();
 
       let scrapedMarkdown = "";
       let iconUrl: string | null = null;
       logger.info("dna-extraction: scraping URL", { source_url });
       try {
         const scraped = await firecrawl.scrapeUrl(source_url, {
-          formats: ["markdown", "html"],
+          // "html" is Firecrawl's cleaned main-content extraction — it
+          // strips <head> entirely, so favicon <link> tags never appear
+          // there. "rawHtml" is the true unprocessed source and is what
+          // icon resolution below actually needs.
+          formats: ["markdown", "rawHtml"],
+          timeout: SCRAPE_TIMEOUT_MS,
         });
         if ("markdown" in scraped && scraped.markdown) {
           scrapedMarkdown = scraped.markdown;
@@ -127,7 +142,7 @@ export const dnaExtraction = schemaTask({
         // worst case the UI falls back to a first-letter avatar.
         try {
           iconUrl = await resolveAppIconUrl({
-            html: "html" in scraped ? scraped.html : null,
+            html: "rawHtml" in scraped ? scraped.rawHtml : null,
             ogImage: "metadata" in scraped ? scraped.metadata?.ogImage : null,
             sourceUrl: source_url,
           });
@@ -202,17 +217,19 @@ ${docTexts.length > 0 ? `=== SUPPORTING DOCUMENTS ===\n${docTexts.map((text, i) 
         model: CLAUDE_MODEL,
         context_length: combinedContext.length,
       });
-      const message = await anthropic.messages.create({
-        model: CLAUDE_MODEL,
-        max_tokens: 2048,
-        system: SYSTEM_PROMPT,
-        messages: [
-          {
-            role: "user",
-            content: `Extract the app DNA from the following content:\n\n${combinedContext}`,
-          },
-        ],
-      });
+      const message = await callExternalService("claude", ErrorMessages.external.CLAUDE_FAILED, () =>
+        anthropic.messages.create({
+          model: CLAUDE_MODEL,
+          max_tokens: 2048,
+          system: SYSTEM_PROMPT,
+          messages: [
+            {
+              role: "user",
+              content: `Extract the app DNA from the following content:\n\n${combinedContext}`,
+            },
+          ],
+        })
+      );
       logger.info("dna-extraction: Claude call finished", {
         stop_reason: message.stop_reason,
         usage: message.usage,
@@ -237,9 +254,7 @@ ${docTexts.length > 0 ? `=== SUPPORTING DOCUMENTS ===\n${docTexts.map((text, i) 
           raw_response: responseText.slice(0, 2000),
           error: err instanceof Error ? err.message : String(err),
         });
-        throw new Error(
-          `Claude returned an unparseable DNA object: ${err instanceof Error ? err.message : String(err)}`
-        );
+        throw new ExternalServiceError(ErrorMessages.external.CLAUDE_FAILED, "claude");
       }
 
       logger.info("dna-extraction: DNA parsed successfully", { name: dna.name });
@@ -260,29 +275,25 @@ ${docTexts.length > 0 ? `=== SUPPORTING DOCUMENTS ===\n${docTexts.map((text, i) 
 
       logger.info("dna-extraction: app row updated to strategy_pending", { app_id });
 
-      await tasks.trigger<typeof strategyGeneration>("strategy-generation", {
+      const strategyHandle = await tasks.trigger<typeof strategyGeneration>("strategy-generation", {
         app_id,
         workspace_id,
       });
+
+      // Replaces this run's own tracking with the chained job's — dna-
+      // extraction is done, so from here trigger/job-watchdog.ts should be
+      // watching strategy-generation instead.
+      await supabaseAdmin
+        .from("apps")
+        .update({ pending_run_id: strategyHandle.id, pending_run_task: "strategy-generation" })
+        .eq("id", app_id)
+        .eq("workspace_id", workspace_id);
 
       logger.info("dna-extraction: strategy-generation triggered", { app_id });
 
       return { app_id, status: "strategy_pending" as const };
     } catch (err) {
-      const message = err instanceof Error ? err.message : "DNA extraction failed.";
-      logger.error("dna-extraction failed", {
-        app_id,
-        workspace_id,
-        error: message,
-        stack: err instanceof Error ? err.stack : undefined,
-      });
-
-      await supabaseAdmin
-        .from("apps")
-        .update({ status: "error", error_message: message })
-        .eq("id", app_id)
-        .eq("workspace_id", workspace_id);
-
+      await handleJobError(err, { appId: app_id, workspaceId: workspace_id, jobName: "dna-extraction" });
       throw err;
     }
   },

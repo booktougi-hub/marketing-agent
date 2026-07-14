@@ -4,6 +4,9 @@ import { createServerClient } from "@supabase/auth-helpers-nextjs";
 import { z } from "zod";
 import { supabaseAdmin } from "@/lib/supabase-server";
 import { encryptSecret } from "@/lib/crypto";
+import { withErrorHandling } from "@/lib/errors/apiHandler";
+import { ErrorMessages } from "@/lib/errors/messages";
+import { UnauthorizedError, ForbiddenError, NotFoundError, ValidationError, InternalError } from "@/lib/errors/AppError";
 
 const PLATFORM = "devto";
 
@@ -34,7 +37,7 @@ async function resolveWorkspaceId(cookieStore: Awaited<ReturnType<typeof cookies
   } = await supabase.auth.getUser();
 
   if (!user) {
-    return { error: NextResponse.json({ error: "Unauthorized", code: "UNAUTHENTICATED" }, { status: 401 }) };
+    throw new UnauthorizedError(ErrorMessages.auth.UNAUTHORIZED);
   }
 
   const { data: membership } = await supabaseAdmin
@@ -46,12 +49,7 @@ async function resolveWorkspaceId(cookieStore: Awaited<ReturnType<typeof cookies
   const workspaceId = membership?.workspace_id as string | undefined;
 
   if (!workspaceId) {
-    return {
-      error: NextResponse.json(
-        { error: "No workspace found for this account.", code: "NO_WORKSPACE" },
-        { status: 403 }
-      ),
-    };
+    throw new ForbiddenError(ErrorMessages.auth.NO_WORKSPACE, "NO_WORKSPACE");
   }
 
   return { workspaceId };
@@ -62,17 +60,14 @@ async function resolveWorkspaceId(cookieStore: Awaited<ReturnType<typeof cookies
 // no app_id column), even though this is triggered from a single app's
 // settings page. We still confirm `id` belongs to the caller's workspace
 // so the route can't be used to probe app ids across workspaces.
-export async function POST(
+export const POST = withErrorHandling(async (
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
-) {
-  try {
+) => {
     const { id } = await params;
     const cookieStore = await cookies();
 
-    const resolved = await resolveWorkspaceId(cookieStore);
-    if (resolved.error) return resolved.error;
-    const { workspaceId } = resolved;
+    const { workspaceId } = await resolveWorkspaceId(cookieStore);
 
     const { data: app } = await supabaseAdmin
       .from("apps")
@@ -82,23 +77,14 @@ export async function POST(
       .single();
 
     if (!app) {
-      return NextResponse.json(
-        { error: "App not found.", code: "NOT_FOUND" },
-        { status: 404 }
-      );
+      throw new NotFoundError(ErrorMessages.apps.NOT_FOUND);
     }
 
     const json = await request.json().catch(() => null);
     const parsed = postSchema.safeParse(json);
 
     if (!parsed.success) {
-      return NextResponse.json(
-        {
-          error: parsed.error.issues[0]?.message ?? "Invalid request body.",
-          code: "VALIDATION_ERROR",
-        },
-        { status: 422 }
-      );
+      throw new ValidationError(parsed.error.issues[0]?.message ?? ErrorMessages.generic.INVALID_REQUEST_BODY);
     }
 
     let encrypted: string;
@@ -106,10 +92,7 @@ export async function POST(
       encrypted = encryptSecret(JSON.stringify({ api_key: parsed.data.api_key }));
     } catch (err) {
       console.error("Failed to encrypt platform credentials:", err);
-      return NextResponse.json(
-        { error: "Server is not configured to store credentials.", code: "SERVER_ERROR" },
-        { status: 500 }
-      );
+      throw new InternalError(ErrorMessages.platforms.NOT_CONFIGURED);
     }
 
     const { error: upsertError } = await supabaseAdmin
@@ -126,33 +109,20 @@ export async function POST(
       );
 
     if (upsertError) {
-      return NextResponse.json(
-        { error: "Failed to save connection.", code: "SERVER_ERROR" },
-        { status: 500 }
-      );
+      throw new InternalError(ErrorMessages.platforms.SAVE_FAILED);
     }
 
     return NextResponse.json({ success: true }, { status: 200 });
-  } catch (error) {
-    console.error("POST /api/apps/[id]/platforms/devto error:", error);
-    return NextResponse.json(
-      { error: "Something went wrong. Please try again.", code: "SERVER_ERROR" },
-      { status: 500 }
-    );
-  }
-}
+});
 
-export async function DELETE(
+export const DELETE = withErrorHandling(async (
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
-) {
-  try {
+) => {
     const { id } = await params;
     const cookieStore = await cookies();
 
-    const resolved = await resolveWorkspaceId(cookieStore);
-    if (resolved.error) return resolved.error;
-    const { workspaceId } = resolved;
+    const { workspaceId } = await resolveWorkspaceId(cookieStore);
 
     const { data: app } = await supabaseAdmin
       .from("apps")
@@ -162,10 +132,7 @@ export async function DELETE(
       .single();
 
     if (!app) {
-      return NextResponse.json(
-        { error: "App not found.", code: "NOT_FOUND" },
-        { status: 404 }
-      );
+      throw new NotFoundError(ErrorMessages.apps.NOT_FOUND);
     }
 
     const { error: deleteError } = await supabaseAdmin
@@ -175,18 +142,8 @@ export async function DELETE(
       .eq("platform", PLATFORM);
 
     if (deleteError) {
-      return NextResponse.json(
-        { error: "Failed to disconnect.", code: "SERVER_ERROR" },
-        { status: 500 }
-      );
+      throw new InternalError(ErrorMessages.platforms.DISCONNECT_FAILED);
     }
 
     return NextResponse.json({ success: true }, { status: 200 });
-  } catch (error) {
-    console.error("DELETE /api/apps/[id]/platforms/devto error:", error);
-    return NextResponse.json(
-      { error: "Something went wrong. Please try again.", code: "SERVER_ERROR" },
-      { status: 500 }
-    );
-  }
-}
+});

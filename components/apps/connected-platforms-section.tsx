@@ -15,6 +15,8 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { ErrorMessage } from "@/components/shared/ErrorMessage";
+import { parseApiError } from "@/lib/errors/parseApiError";
 
 const COMING_SOON_PLATFORMS = [
   { label: "Twitter / X", description: "Auto-publish posts to your Twitter/X account." },
@@ -53,9 +55,9 @@ export function ConnectedPlatformsSection({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ api_key: apiKey }),
       });
-      const json = await res.json().catch(() => null);
       if (!res.ok) {
-        setError(json?.error ?? "Failed to connect Dev.to.");
+        const { message } = await parseApiError(res);
+        setError(message);
         return;
       }
       setConnected(true);
@@ -147,7 +149,7 @@ export function ConnectedPlatformsSection({
               autoComplete="off"
             />
             <p className="text-xs text-muted-foreground">Find at dev.to/settings/account</p>
-            {error && <p className="text-sm text-destructive">{error}</p>}
+            {error && <ErrorMessage message={error} />}
           </div>
 
           <DialogFooter>
