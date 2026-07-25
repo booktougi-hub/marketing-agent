@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { LayoutDashboard, LayoutGrid, MessageCircle, Settings } from "lucide-react";
+import { LayoutDashboard, LayoutGrid, Settings } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useDashboardApp } from "@/components/dashboard/AppContext";
 
@@ -31,13 +31,6 @@ export function MobileBottomNav() {
       href: selectedAppId ? `/dashboard/apps/${selectedAppId}/settings` : "/dashboard/settings",
       icon: Settings,
       isActive: activeSection === "settings" || pathname === "/dashboard/settings",
-    },
-    {
-      key: "chat",
-      label: "Chat",
-      href: "/dashboard/chat",
-      icon: MessageCircle,
-      isActive: pathname === "/dashboard/chat",
     },
   ];
 

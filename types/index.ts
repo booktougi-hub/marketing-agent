@@ -47,6 +47,9 @@ export type ProductType =
 export type AppStatus =
   | "pending"
   | "extracting"
+  | "competitor_research_pending"
+  | "diagnosis_pending"
+  | "diagnosis_ready"
   | "strategy_pending"
   | "awaiting_approval"
   | "active"
@@ -115,16 +118,74 @@ export interface App {
   first_outreach_completed: boolean;
   icp_data: IcpData | null;
   icp_status: IcpStatus;
+  diagnosis: DiagnosisData | null;
+  diagnosis_status: DiagnosisStatus;
+  diagnosis_refresh_status: DiagnosisRefreshStatus;
+  last_diagnosis_refresh_at: string | null;
   created_at: string;
   updated_at: string;
 }
 
 export type PendingRunTask =
   | "dna-extraction"
+  | "competitor-research"
+  | "diagnosis"
   | "strategy-generation"
   | "content-generation"
   | "icp-inference"
   | "outreach-preview";
+
+// ---------------------------------------------------------------------------
+// Diagnosis-first pipeline — real competitor research feeds a written growth
+// diagnosis (trigger/diagnosis.ts), which strategy-generation then builds
+// the strategy around, instead of generating personas/pillars from DNA alone.
+// ---------------------------------------------------------------------------
+
+export type DiagnosisStatus = "pending" | "shown" | "acknowledged";
+
+export type DiagnosisBottleneck = "awareness" | "trust" | "activation" | "distribution";
+
+export type DiagnosisConfidence = "high" | "medium" | "low";
+
+export interface DiagnosisData {
+  bottleneck: DiagnosisBottleneck;
+  reasoning: string;
+  competitive_context: string;
+  primary_lever: string;
+  confidence: DiagnosisConfidence;
+}
+
+export interface CompetitorResearch {
+  id: string;
+  app_id: string;
+  workspace_id: string;
+  competitor_name: string | null;
+  competitor_url: string | null;
+  scraped_summary: string | null;
+  pricing_notes: string | null;
+  positioning_notes: string | null;
+  created_at: string;
+}
+
+// ---------------------------------------------------------------------------
+// diagnosis_proposals — quarterly background re-check of the competitive
+// landscape (trigger/diagnosis-refresh-check.ts), reviewed via the same
+// acknowledge/approve UI pattern as the original diagnosis.
+// ---------------------------------------------------------------------------
+
+export type DiagnosisRefreshStatus = "none" | "proposal_ready" | "reviewed";
+
+export type DiagnosisProposalStatus = "pending" | "accepted" | "dismissed";
+
+export interface DiagnosisProposal {
+  id: string;
+  app_id: string;
+  workspace_id: string;
+  change_summary: string;
+  proposed_diagnosis: DiagnosisData;
+  status: DiagnosisProposalStatus;
+  created_at: string;
+}
 
 // ---------------------------------------------------------------------------
 // Outreach onboarding — ICP inference + one-time prospect preview
@@ -200,6 +261,11 @@ export interface Strategy {
   linkedin_strategy: string | null;
   status: StrategyStatus;
   version: number;
+  // Snapshot of apps.diagnosis at the moment this strategy was generated —
+  // apps.diagnosis can be overwritten by a later diagnosis run, so this is
+  // what actually stays queryable alongside the strategy that used it.
+  diagnosis_snapshot: DiagnosisData | null;
+  built_from_diagnosis: boolean;
   created_at: string;
 }
 
@@ -412,4 +478,286 @@ export interface OptimizationCycle {
   rolled_back: boolean;
   week_of: string | null;
   created_at: string;
+}
+
+// ---------------------------------------------------------------------------
+// onboarding_findings — first of the planned "Audits" family
+// (trigger/onboarding-audit.ts). See PHASES.md Notes Log (2026-07-22).
+// ---------------------------------------------------------------------------
+
+export type OnboardingFindingSeverity = "high" | "medium" | "low";
+
+export type OnboardingFindingStatus = "open" | "fixed" | "not_applicable";
+
+export interface OnboardingFinding {
+  id: string;
+  app_id: string;
+  workspace_id: string;
+  // Free text, not a fixed enum — see SCHEMA.md's migration note on this table.
+  finding_type: string;
+  severity: OnboardingFindingSeverity;
+  issue_description: string;
+  suggested_fix: string;
+  status: OnboardingFindingStatus;
+  created_at: string;
+}
+
+// ---------------------------------------------------------------------------
+// churn_findings — second of the "Audits" family (trigger/churn-audit.ts).
+// Same shape as onboarding_findings by design; see SCHEMA.md for why it's a
+// separate table rather than a shared one.
+// ---------------------------------------------------------------------------
+
+export type ChurnFindingSeverity = "high" | "medium" | "low";
+
+export type ChurnFindingStatus = "open" | "fixed" | "not_applicable";
+
+export interface ChurnFinding {
+  id: string;
+  app_id: string;
+  workspace_id: string;
+  finding_type: string;
+  severity: ChurnFindingSeverity;
+  issue_description: string;
+  suggested_fix: string;
+  status: ChurnFindingStatus;
+  created_at: string;
+}
+
+// ---------------------------------------------------------------------------
+// cro_findings — third and last of the "Audits" family
+// (trigger/cro-audit.ts). Same shape as onboarding_findings/churn_findings.
+// ---------------------------------------------------------------------------
+
+export type CroFindingSeverity = "high" | "medium" | "low";
+
+export type CroFindingStatus = "open" | "fixed" | "not_applicable";
+
+export interface CroFinding {
+  id: string;
+  app_id: string;
+  workspace_id: string;
+  finding_type: string;
+  severity: CroFindingSeverity;
+  issue_description: string;
+  suggested_fix: string;
+  status: CroFindingStatus;
+  created_at: string;
+}
+
+// ---------------------------------------------------------------------------
+// pricing_findings — fourth of the "Audits" family (trigger/pricing-audit.ts).
+// Same shape as the other three. Audits the end user's own app's pricing,
+// not this SaaS's own pricing.
+// ---------------------------------------------------------------------------
+
+export type PricingFindingSeverity = "high" | "medium" | "low";
+
+export type PricingFindingStatus = "open" | "fixed" | "not_applicable";
+
+export interface PricingFinding {
+  id: string;
+  app_id: string;
+  workspace_id: string;
+  finding_type: string;
+  severity: PricingFindingSeverity;
+  issue_description: string;
+  suggested_fix: string;
+  status: PricingFindingStatus;
+  created_at: string;
+}
+
+// ---------------------------------------------------------------------------
+// seo_geo_scores / seo_geo_findings — SEO & GEO scoring engine (see
+// SCORING.md). Two independent evaluation tracks, never blended into one
+// score. Only the SEO track is built/populated so far — the GEO track's
+// shape is included since both tracks share one schema, but no GEO rows are
+// written yet.
+// ---------------------------------------------------------------------------
+
+export type SeoGeoTrack = "seo" | "geo";
+
+export type SeoDimension = "retrievability" | "off_page";
+export type GeoDimension = "content_quality" | "structure" | "freshness";
+
+export interface SeoDimScores {
+  retrievability: number;
+  off_page: number;
+}
+
+export type EvidenceTier = 1 | 2 | 3;
+
+export interface SeoGeoCheckResult {
+  pass: boolean | null; // null when not_measurable
+  value: unknown;
+  confidence: number;
+  measurable: boolean;
+}
+
+export type SeoGeoCheckResultMap = Record<string, SeoGeoCheckResult>;
+
+export interface SeoGeoScore {
+  id: string;
+  app_id: string;
+  workspace_id: string;
+  page_url: string | null;
+  page_id: string | null;
+  content_id: string | null;
+  track: SeoGeoTrack;
+  score: number;
+  dim_scores: SeoDimScores | Record<string, number>;
+  check_results: SeoGeoCheckResultMap;
+  run_at: string;
+}
+
+export type SeoGeoFindingStatus = "open" | "applied" | "skipped";
+
+export type SeoGeoRemediation =
+  | { type: "diff"; before: string; after: string; section: string }
+  | { type: "pr"; files: unknown[] }
+  | { type: "route_to_forum"; reason: string }
+  | { type: "technical"; instruction: string; snippet?: string };
+
+export interface SeoGeoFinding {
+  id: string;
+  app_id: string;
+  workspace_id: string;
+  page_url: string | null;
+  page_id: string | null;
+  content_id: string | null;
+  track: SeoGeoTrack;
+  check_id: string;
+  dimension: string;
+  evidence_tier: EvidenceTier;
+  expected_gain: number;
+  title: string;
+  explanation: string;
+  confidence_label: string;
+  remediation: SeoGeoRemediation | null;
+  status: SeoGeoFindingStatus;
+  skip_count: number;
+  created_at: string;
+}
+
+// ---------------------------------------------------------------------------
+// brand_information
+// ---------------------------------------------------------------------------
+
+export type ExtractionFieldSource = "auto" | "manual";
+
+export type BrandExtractionStatus = "idle" | "processing" | "complete" | "error";
+
+export interface BrandKeyStat {
+  label: string;
+  value: string;
+  source_url: string | null;
+}
+
+export interface BrandPricingPlan {
+  plan_name: string;
+  price: string;
+  billing_period: string | null;
+}
+
+// Free-form: keys are whichever platform names extraction or the customer
+// used ("twitter", "linkedin", "github", ...), not a fixed enum.
+export type BrandSocialHandles = Record<string, string>;
+
+// One entry per top-level brand_information column that can be auto-filled.
+// Keys are BrandInformation field names (as a loose Record rather than every
+// literal key, since not every column is extractable/trackable this way —
+// e.g. the metadata columns themselves never appear here).
+export type BrandExtractionSource = Partial<Record<string, ExtractionFieldSource>>;
+
+export interface BrandInformation {
+  id: string;
+  app_id: string;
+  workspace_id: string;
+
+  // Core identity
+  brand_name: string | null;
+  one_liner: string | null;
+  category: string | null;
+  website_url: string | null;
+  logo_url: string | null;
+
+  // Positioning
+  problem_solved: string | null;
+  target_customer: string | null;
+  differentiator: string | null;
+  known_competitors: string[] | null;
+
+  // Voice & tone
+  tone_descriptors: string[] | null;
+  words_to_avoid: string[] | null;
+  writing_sample: string | null;
+
+  // Proof points
+  key_stats: BrandKeyStat[] | null;
+  testimonial: string | null;
+  testimonial_source: string | null;
+  pricing_summary: BrandPricingPlan[] | null;
+
+  // Channels & handles
+  social_handles: BrandSocialHandles | null;
+  github_repo_url: string | null;
+
+  // Founder context (optional)
+  founder_name: string | null;
+  founder_bio: string | null;
+
+  // Guardrails
+  claims_to_avoid: string[] | null;
+  target_regions: string[] | null;
+
+  // Visual identity
+  primary_color_hex: string | null;
+  secondary_color_hex: string | null;
+  font_preference: string | null;
+  product_screenshots: string[] | null;
+
+  // Metadata
+  extraction_source: BrandExtractionSource | null;
+  extraction_status: BrandExtractionStatus;
+  extraction_error: string | null;
+  last_analyzed_at: string | null;
+  updated_at: string;
+}
+
+// Right-side chat panel (components/dashboard/ChatPanel.tsx) — persistent
+// across the whole dashboard shell, not tied to a single app page. "text"
+// covers both a plain answer and an off-topic redirect (the coordinator
+// distinguishes them server-side; the panel renders both as the same
+// bubble). "confirm_action" is for mutating actions the coordinator wants
+// to run — rendered inline via AuditFindingCard rather than a bespoke
+// confirmation component (see components/apps/audit-finding-card.tsx).
+export type ChatMessageRole = "user" | "assistant";
+export type ChatMessageKind = "text" | "confirm_action";
+
+// Structurally identical to AuditFindingCard's own severity/status unions
+// (components/apps/audit-finding-card.tsx) — same pattern every other
+// finding domain in this file follows (OnboardingFindingSeverity,
+// ChurnFindingSeverity, ...), so this threads straight into that card's
+// props without types/index.ts importing from a component file.
+export type ChatActionSeverity = "high" | "medium" | "low";
+export type ChatActionStatus = "open" | "fixed" | "not_applicable";
+
+export interface ChatConfirmAction {
+  actionId: string;
+  label: string;
+  severity: ChatActionSeverity;
+  description: string;
+  effect: string;
+  // "open" = awaiting the user's decision; "fixed" = confirmed/executed;
+  // "not_applicable" = declined.
+  status: ChatActionStatus;
+}
+
+export interface ChatMessage {
+  id: string;
+  role: ChatMessageRole;
+  kind: ChatMessageKind;
+  content: string;
+  confirmAction?: ChatConfirmAction;
+  createdAt: string;
 }

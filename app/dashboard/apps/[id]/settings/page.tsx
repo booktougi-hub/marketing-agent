@@ -3,7 +3,7 @@ import { notFound, redirect } from "next/navigation";
 import { createServerClient } from "@supabase/auth-helpers-nextjs";
 import { AppSettingsView } from "@/components/apps/app-settings-view";
 import { supabaseAdmin } from "@/lib/supabase-server";
-import { parsePublishingSchedule } from "@/lib/app-settings";
+import { parseConversionRetention, parsePublishingSchedule } from "@/lib/app-settings";
 import type { AppStatus, PlanTier, ResearchDay } from "@/types";
 
 export default async function AppSettingsPage({
@@ -94,6 +94,9 @@ export default async function AppSettingsPage({
       reanalysisCreditsResetAt={app.reanalysis_credits_reset_at}
       publishingSchedule={parsePublishingSchedule(
         (app.app_settings as Record<string, unknown> | null)?.publishing_schedule
+      )}
+      conversionRetention={parseConversionRetention(
+        (app.app_settings as Record<string, unknown> | null)?.conversion_retention
       )}
       devtoConnected={!!devtoCredential?.is_active}
       isPaused={app.is_paused}

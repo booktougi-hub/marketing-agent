@@ -21,10 +21,18 @@ import {
   InternalError,
   ValidationError,
 } from "@/lib/errors/AppError";
+import { appRunTag } from "@/lib/jobHealthRegistry";
 import type { topicResearch } from "@/trigger/topic-research";
 import type { problemDiscovery } from "@/trigger/problem-discovery";
 import type { forumOpportunityFinder } from "@/trigger/forum-opportunity-finder";
 import type { competitorGapAnalysis } from "@/trigger/competitor-gap-analysis";
+import type { onboardingAudit } from "@/trigger/onboarding-audit";
+import type { churnAudit } from "@/trigger/churn-audit";
+import type { croAudit } from "@/trigger/cro-audit";
+import type { pricingAudit } from "@/trigger/pricing-audit";
+import type { diagnosisRefreshCheck } from "@/trigger/diagnosis-refresh-check";
+import type { seoGeoAudit } from "@/trigger/seo-geo-audit";
+import type { brandInfoExtraction } from "@/trigger/brand-info-extraction";
 import type { PlanTier } from "@/types";
 
 const postSchema = z.object({
@@ -33,6 +41,13 @@ const postSchema = z.object({
     "forum_opportunity_scan",
     "competitor_gap_analysis",
     "cold_email_prospecting",
+    "onboarding_audit",
+    "churn_prevention_audit",
+    "cro_audit",
+    "pricing_audit",
+    "diagnosis_refresh",
+    "seo_audit",
+    "brand_info_extraction",
   ]),
 });
 
@@ -95,7 +110,9 @@ export const POST = withErrorHandling(async (
 
   const { data: app } = await supabaseAdmin
     .from("apps")
-    .select("id, agent_credits_used_this_week, agent_credits_reset_at, last_agent_action_at")
+    .select(
+      "id, agent_credits_used_this_week, agent_credits_reset_at, last_agent_action_at, diagnosis_status, diagnosis_refresh_status"
+    )
     .eq("id", id)
     .eq("workspace_id", workspaceId)
     .single();
@@ -125,6 +142,40 @@ export const POST = withErrorHandling(async (
       { error: "Cold email prospecting isn't available yet.", code: "NOT_IMPLEMENTED" },
       { status: 501 }
     );
+  }
+
+  // Diagnosis refresh only makes sense once the founder has an acknowledged
+  // diagnosis to refresh, and shouldn't pile up a second proposal while one
+  // is already waiting for review — checked before any credit/cooldown
+  // mutation, same reasoning as the cold-email check above.
+  if (actionType === "diagnosis_refresh") {
+    if (app.diagnosis_status !== "acknowledged") {
+      throw new ValidationError(ErrorMessages.diagnosisRefresh.NOT_ELIGIBLE, "NOT_ELIGIBLE");
+    }
+    if (app.diagnosis_refresh_status === "proposal_ready") {
+      throw new ValidationError(ErrorMessages.diagnosisRefresh.PROPOSAL_ALREADY_PENDING, "PROPOSAL_ALREADY_PENDING");
+    }
+  }
+
+  // Brand Identity re-analysis only runs through this credit-gated route —
+  // the first-ever analysis is free and goes through
+  // POST /api/apps/[id]/brand-information/analyze instead, which creates
+  // this row. Re-analyze requires that row to already exist, and refuses to
+  // pile onto a run still in flight.
+  if (actionType === "brand_info_extraction") {
+    const { data: brandInfo } = await supabaseAdmin
+      .from("brand_information")
+      .select("extraction_status")
+      .eq("app_id", id)
+      .eq("workspace_id", workspaceId)
+      .maybeSingle();
+
+    if (!brandInfo) {
+      throw new ValidationError(ErrorMessages.brandInformation.NOT_YET_ANALYZED, "NOT_YET_ANALYZED");
+    }
+    if (brandInfo.extraction_status === "processing") {
+      throw new ValidationError(ErrorMessages.brandInformation.ALREADY_IN_PROGRESS, "ALREADY_IN_PROGRESS");
+    }
   }
 
   const affordCheck = canAffordAction(app, actionType, planTier);
@@ -161,22 +212,47 @@ export const POST = withErrorHandling(async (
   }
 
   const jobPayload = { app_id: id, workspace_id: workspaceId };
+  const tagOptions = { tags: [appRunTag(id)] };
 
   if (actionType === "topic_and_problem_research") {
     await Promise.all([
-      tasks.trigger<typeof topicResearch>("topic-research", {
-        ...jobPayload,
-        triggered_manually: true,
-      }),
-      tasks.trigger<typeof problemDiscovery>("problem-discovery", {
-        ...jobPayload,
-        triggered_manually: true,
-      }),
+      tasks.trigger<typeof topicResearch>(
+        "topic-research",
+        { ...jobPayload, triggered_manually: true },
+        tagOptions
+      ),
+      tasks.trigger<typeof problemDiscovery>(
+        "problem-discovery",
+        { ...jobPayload, triggered_manually: true },
+        tagOptions
+      ),
     ]);
   } else if (actionType === "forum_opportunity_scan") {
-    await tasks.trigger<typeof forumOpportunityFinder>("forum-opportunity-finder", jobPayload);
+    await tasks.trigger<typeof forumOpportunityFinder>("forum-opportunity-finder", jobPayload, tagOptions);
   } else if (actionType === "competitor_gap_analysis") {
-    await tasks.trigger<typeof competitorGapAnalysis>("competitor-gap-analysis", jobPayload);
+    await tasks.trigger<typeof competitorGapAnalysis>("competitor-gap-analysis", jobPayload, tagOptions);
+  } else if (actionType === "onboarding_audit") {
+    await tasks.trigger<typeof onboardingAudit>("onboarding-audit", jobPayload, tagOptions);
+  } else if (actionType === "churn_prevention_audit") {
+    await tasks.trigger<typeof churnAudit>("churn-audit", jobPayload, tagOptions);
+  } else if (actionType === "cro_audit") {
+    await tasks.trigger<typeof croAudit>("cro-audit", jobPayload, tagOptions);
+  } else if (actionType === "pricing_audit") {
+    await tasks.trigger<typeof pricingAudit>("pricing-audit", jobPayload, tagOptions);
+  } else if (actionType === "diagnosis_refresh") {
+    await tasks.trigger<typeof diagnosisRefreshCheck>("diagnosis-refresh-check", jobPayload, tagOptions);
+  } else if (actionType === "seo_audit") {
+    await tasks.trigger<typeof seoGeoAudit>("seo-geo-audit", jobPayload, tagOptions);
+  } else if (actionType === "brand_info_extraction") {
+    // Flip to "processing" before enqueueing so the Settings UI's realtime
+    // subscription sees the loading state immediately, not just once the
+    // job itself gets around to it.
+    await supabaseAdmin
+      .from("brand_information")
+      .update({ extraction_status: "processing", extraction_error: null })
+      .eq("app_id", id)
+      .eq("workspace_id", workspaceId);
+    await tasks.trigger<typeof brandInfoExtraction>("brand-info-extraction", jobPayload, tagOptions);
   }
 
   const { remaining } = getRemainingCredits(

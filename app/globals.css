@@ -7,9 +7,9 @@
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
-  --font-sans: var(--font-body);
+  --font-sans: var(--font-sans-shared);
   --font-mono: var(--font-mono);
-  --font-heading: var(--font-heading);
+  --font-heading: var(--font-sans-shared);
   --color-sidebar-ring: var(--sidebar-ring);
   --color-sidebar-border: var(--sidebar-border);
   --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
@@ -71,35 +71,38 @@
 }
 
 :root {
-  /* Midnight Flow — light variant, derived from DESIGN.md to keep the same
-     brand hues (electric blue primary, soft mint secondary) with cooler,
-     higher-contrast surfaces suited to a light background. */
-  --background: #f3f5fb;
-  --foreground: #10182b;
+  /* Monolith Precision — light variant, derived from DESIGN.md to keep the
+     same neutral-charcoal + indigo identity with higher-contrast surfaces
+     suited to a light background. DESIGN.md itself only specifies a dark
+     "pro-tool" palette; this light complement keeps the single indigo
+     accent (#4F46E5 works on both) and reuses the same muted-gray value
+     for secondary text on either background. */
+  --background: #fafafa;
+  --foreground: #171717;
   --card: #ffffff;
-  --card-foreground: #10182b;
+  --card-foreground: #171717;
   --popover: #ffffff;
-  --popover-foreground: #10182b;
-  --primary: #0284c7;
+  --popover-foreground: #171717;
+  --primary: #4f46e5;
   --primary-foreground: #ffffff;
-  --secondary: #059669;
-  --secondary-foreground: #ffffff;
-  --secondary-container: #d3f5e4;
-  --on-secondary-container: #04543c;
-  --muted: #e7ebf5;
-  --muted-foreground: #5b6478;
-  --accent: #e2e9f9;
-  --accent-foreground: #10182b;
+  --secondary: #f0f0f0;
+  --secondary-foreground: #171717;
+  --secondary-container: #e5e5e5;
+  --on-secondary-container: #525252;
+  --muted: #f5f5f5;
+  --muted-foreground: #737373;
+  --accent: #f0f0f0;
+  --accent-foreground: #171717;
   --destructive: #b3261e;
   --destructive-container: #ffdad4;
   --on-destructive-container: #7a1a13;
-  --tertiary: #46586f;
+  --tertiary: #525252;
   --on-tertiary: #ffffff;
-  --tertiary-container: #dbe4f3;
-  --on-tertiary-container: #2c3c50;
-  --border: rgb(16 24 43 / 8%);
-  --input: rgb(16 24 43 / 10%);
-  --ring: #0284c7;
+  --tertiary-container: #e5e5e5;
+  --on-tertiary-container: #404040;
+  --border: rgb(0 0 0 / 10%);
+  --input: #ffffff;
+  --ring: #4f46e5;
   --chart-1: #2a78d6;
   --chart-2: #1baf7a;
   --chart-3: #eda100;
@@ -110,54 +113,62 @@
   --status-good: #0ca30c;
   --status-warning: #fab219;
   --radius: 0.5rem;
-  --surface-dim: #d7dce8;
-  --surface-bright: #f3f5fb;
+  --surface-dim: #e5e5e5;
+  --surface-bright: #fafafa;
   --surface-container-lowest: #ffffff;
-  --surface-container-low: #edf0f8;
-  --surface-container: #e7ebf5;
-  --surface-container-high: #e1e5f0;
-  --surface-container-highest: #dbdfec;
-  --on-surface-variant: #444d61;
-  --outline: rgb(16 24 43 / 16%);
-  --outline-variant: rgb(16 24 43 / 8%);
+  --surface-container-low: #f5f5f5;
+  --surface-container: #f0f0f0;
+  --surface-container-high: #ebebeb;
+  --surface-container-highest: #e5e5e5;
+  --on-surface-variant: #525252;
+  --outline: rgb(0 0 0 / 20%);
+  --outline-variant: rgb(0 0 0 / 10%);
   --sidebar: #ffffff;
-  --sidebar-foreground: #10182b;
-  --sidebar-primary: #0284c7;
+  --sidebar-foreground: #171717;
+  --sidebar-primary: #4f46e5;
   --sidebar-primary-foreground: #ffffff;
-  --sidebar-accent: #e7ebf5;
-  --sidebar-accent-foreground: #10182b;
-  --sidebar-border: rgb(16 24 43 / 8%);
-  --sidebar-ring: #0284c7;
+  --sidebar-accent: #f0f0f0;
+  --sidebar-accent-foreground: #171717;
+  --sidebar-border: rgb(0 0 0 / 10%);
+  --sidebar-ring: #4f46e5;
 }
 
 .dark {
-  /* Midnight Flow — dark variant, values from DESIGN.md verbatim. */
-  --background: #0b1326;
-  --foreground: #dae2fd;
-  --card: #171f33;
-  --card-foreground: #dae2fd;
-  --popover: #222a3d;
-  --popover-foreground: #dae2fd;
-  --primary: #8ed5ff;
-  --primary-foreground: #00354a;
-  --secondary: #4de082;
-  --secondary-foreground: #003919;
-  --secondary-container: #00b55d;
-  --on-secondary-container: #003e1c;
-  --muted: #222a3d;
-  --muted-foreground: #bdc8d1;
-  --accent: #2d3449;
-  --accent-foreground: #dae2fd;
+  /* Monolith Precision — dark variant, values from DESIGN.md's prose
+     "Colors"/"Elevation & Depth" sections verbatim (background #0A0A0A,
+     Level 1 cards/sidebar #171717, Level 2 modals/popovers #1C1C1C,
+     hairline border #262626, hover/interactive border #404040, indigo
+     accent #4F46E5, muted text #737373). DESIGN.md's own front-matter YAML
+     ships a grayscale "primary" with no accent hue at all — superseded
+     here by the prose, which is explicit and internally consistent about
+     wanting a single indigo accent; the front matter reads like leftover
+     output from a palette generator that predates that decision. */
+  --background: #0a0a0a;
+  --foreground: #fafafa;
+  --card: #171717;
+  --card-foreground: #fafafa;
+  --popover: #1c1c1c;
+  --popover-foreground: #fafafa;
+  --primary: #4f46e5;
+  --primary-foreground: #ffffff;
+  --secondary: #262626;
+  --secondary-foreground: #fafafa;
+  --secondary-container: #1c1c1c;
+  --on-secondary-container: #a3a3a3;
+  --muted: #1c1c1c;
+  --muted-foreground: #737373;
+  --accent: #1c1c1c;
+  --accent-foreground: #fafafa;
   --destructive: #ffb4ab;
   --destructive-container: #93000a;
   --on-destructive-container: #ffdad6;
-  --tertiary: #becee4;
-  --on-tertiary: #233143;
-  --tertiary-container: #a3b2c7;
-  --on-tertiary-container: #364557;
-  --border: rgb(255 255 255 / 5%);
-  --input: rgb(255 255 255 / 8%);
-  --ring: #8ed5ff;
+  --tertiary: #a1a1aa;
+  --on-tertiary: #171717;
+  --tertiary-container: #262626;
+  --on-tertiary-container: #d4d4d4;
+  --border: #262626;
+  --input: #0a0a0a;
+  --ring: #4f46e5;
   --chart-1: #3987e5;
   --chart-2: #199e70;
   --chart-3: #c98500;
@@ -165,24 +176,24 @@
   --chart-5: #9085e9;
   --chart-6: #e66767;
   --radius: 0.5rem;
-  --surface-dim: #0b1326;
-  --surface-bright: #31394d;
-  --surface-container-lowest: #060e20;
-  --surface-container-low: #131b2e;
-  --surface-container: #171f33;
-  --surface-container-high: #222a3d;
-  --surface-container-highest: #2d3449;
-  --on-surface-variant: #bdc8d1;
-  --outline: #87929a;
-  --outline-variant: #3e484f;
-  --sidebar: #060e20;
-  --sidebar-foreground: #dae2fd;
-  --sidebar-primary: #8ed5ff;
-  --sidebar-primary-foreground: #00354a;
-  --sidebar-accent: #171f33;
-  --sidebar-accent-foreground: #dae2fd;
-  --sidebar-border: rgb(255 255 255 / 5%);
-  --sidebar-ring: #8ed5ff;
+  --surface-dim: #0a0a0a;
+  --surface-bright: #38393a;
+  --surface-container-lowest: #050505;
+  --surface-container-low: #121212;
+  --surface-container: #171717;
+  --surface-container-high: #1c1c1c;
+  --surface-container-highest: #262626;
+  --on-surface-variant: #a3a3a3;
+  --outline: #404040;
+  --outline-variant: #262626;
+  --sidebar: #171717;
+  --sidebar-foreground: #fafafa;
+  --sidebar-primary: #4f46e5;
+  --sidebar-primary-foreground: #ffffff;
+  --sidebar-accent: #1c1c1c;
+  --sidebar-accent-foreground: #fafafa;
+  --sidebar-border: #262626;
+  --sidebar-ring: #4f46e5;
 }
 
 @layer base {

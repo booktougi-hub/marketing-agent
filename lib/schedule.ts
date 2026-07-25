@@ -94,6 +94,16 @@ export const WEEKLY_AUTOMATIONS: WeeklyAutomation[] = [
     hourUTC: 0,
     minuteUTC: 0,
   },
+  {
+    // Keep in sync with the cron pattern in trigger/weekly-seo-scan.ts
+    // ("0 18 * * 0").
+    id: "weekly-seo-scan",
+    label: "SEO Audit",
+    description: "Refreshes the SEO score and findings for active apps.",
+    dayOfWeekUTC: 0,
+    hourUTC: 18,
+    minuteUTC: 0,
+  },
 ];
 
 export function getNextWeeklyOccurrence(
@@ -140,6 +150,46 @@ export const MONTHLY_AUTOMATIONS: MonthlyAutomation[] = [
     hourUTC: 23,
     minuteUTC: 0,
   },
+  {
+    // Keep in sync with the cron pattern in
+    // trigger/monthly-onboarding-scan.ts ("0 22 1 * *").
+    id: "monthly-onboarding-scan",
+    label: "Onboarding Audit",
+    description: "Refreshes onboarding-audit findings for active apps.",
+    dayOfMonthUTC: 1,
+    hourUTC: 22,
+    minuteUTC: 0,
+  },
+  {
+    // Keep in sync with the cron pattern in
+    // trigger/monthly-churn-scan.ts ("0 21 1 * *").
+    id: "monthly-churn-scan",
+    label: "Churn Prevention Audit",
+    description: "Refreshes churn-audit findings for active apps.",
+    dayOfMonthUTC: 1,
+    hourUTC: 21,
+    minuteUTC: 0,
+  },
+  {
+    // Keep in sync with the cron pattern in
+    // trigger/monthly-cro-scan.ts ("0 20 1 * *").
+    id: "monthly-cro-scan",
+    label: "Conversion (CRO) Audit",
+    description: "Refreshes cro-audit findings for active apps.",
+    dayOfMonthUTC: 1,
+    hourUTC: 20,
+    minuteUTC: 0,
+  },
+  {
+    // Keep in sync with the cron pattern in
+    // trigger/monthly-pricing-scan.ts ("0 19 1 * *").
+    id: "monthly-pricing-scan",
+    label: "Pricing Audit",
+    description: "Refreshes pricing-audit findings for active apps.",
+    dayOfMonthUTC: 1,
+    hourUTC: 19,
+    minuteUTC: 0,
+  },
 ];
 
 export function getNextMonthlyOccurrence(
@@ -161,4 +211,52 @@ export function getNextMonthlyOccurrence(
     next.setUTCMonth(next.getUTCMonth() + 1);
   }
   return next;
+}
+
+// Previous-occurrence counterparts to getNextMonthlyOccurrence/
+// getNextResearchOccurrence above — used by lib/jobHealthRegistry.ts and the
+// System Health panel to tell whether a job's last real run is older than
+// its most recent expected scheduled slot ("overdue"), not just to display
+// the next one.
+export function getPreviousMonthlyOccurrence(
+  automation: Pick<MonthlyAutomation, "dayOfMonthUTC" | "hourUTC" | "minuteUTC">,
+  from: Date = new Date()
+): Date {
+  const thisMonth = new Date(
+    Date.UTC(
+      from.getUTCFullYear(),
+      from.getUTCMonth(),
+      automation.dayOfMonthUTC,
+      automation.hourUTC,
+      automation.minuteUTC,
+      0,
+      0
+    )
+  );
+  if (thisMonth.getTime() <= from.getTime()) {
+    return thisMonth;
+  }
+  return new Date(
+    Date.UTC(
+      from.getUTCFullYear(),
+      from.getUTCMonth() - 1,
+      automation.dayOfMonthUTC,
+      automation.hourUTC,
+      automation.minuteUTC,
+      0,
+      0
+    )
+  );
+}
+
+// Weekly cadence is a fixed 7-day cycle (unlike monthly, which varies in
+// length), so the previous occurrence is always exactly 7 days before the
+// next one.
+export function getPreviousResearchOccurrence(
+  day: ResearchDay,
+  hourUTC: number,
+  from: Date = new Date()
+): Date {
+  const next = getNextResearchOccurrence(day, hourUTC, from);
+  return new Date(next.getTime() - 7 * 24 * 60 * 60 * 1000);
 }

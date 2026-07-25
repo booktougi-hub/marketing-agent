@@ -6,10 +6,12 @@ import { ArrowRight } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { WeeklyActivityChart, type WeeklyActivityDatum } from "@/components/dashboard/WeeklyActivityChart";
+import { AppSystemHealthCard } from "@/components/apps/app-system-health-card";
+import { DiagnosisRefreshNotice } from "@/components/apps/diagnosis-refresh-notice";
 import { supabaseAdmin } from "@/lib/supabase-server";
 import { formatTimeAgo } from "@/lib/time";
 import { OPPORTUNITY_PLATFORM_LABEL, parseForumOpportunity } from "@/lib/opportunity";
-import type { ContentPlatform } from "@/types";
+import type { ContentPlatform, DiagnosisProposal } from "@/types";
 
 const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000;
 const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1000;
@@ -86,13 +88,27 @@ export default async function AppOverviewPage({
 
   const { data: app } = await supabaseAdmin
     .from("apps")
-    .select("id, name, source_url, status")
+    .select("id, name, source_url, status, diagnosis_refresh_status")
     .eq("id", id)
     .eq("workspace_id", workspaceId)
     .single();
 
   if (!app) {
     notFound();
+  }
+
+  let pendingDiagnosisProposal: DiagnosisProposal | null = null;
+  if (app.diagnosis_refresh_status === "proposal_ready") {
+    const { data: proposal } = await supabaseAdmin
+      .from("diagnosis_proposals")
+      .select("*")
+      .eq("app_id", id)
+      .eq("workspace_id", workspaceId)
+      .eq("status", "pending")
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    pendingDiagnosisProposal = proposal as DiagnosisProposal | null;
   }
 
   const sevenDaysAgo = new Date(Date.now() - SEVEN_DAYS_MS).toISOString();
@@ -204,6 +220,12 @@ export default async function AppOverviewPage({
         </h1>
         <p className="text-sm text-muted-foreground">Overview</p>
       </div>
+
+      {pendingDiagnosisProposal && (
+        <DiagnosisRefreshNotice appId={id} proposal={pendingDiagnosisProposal} />
+      )}
+
+      <AppSystemHealthCard appId={id} />
 
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <MetricCard

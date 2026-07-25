@@ -3,12 +3,18 @@ import { z } from "zod";
 import { supabaseAdmin } from "@/lib/supabase-server";
 import { searchWeb } from "@/lib/firecrawl-search";
 import { searchSerpApi } from "@/lib/serpapi-search";
-import { extractKeyPhrase, runResearchStream } from "@/lib/research-job";
+import { runResearchStream } from "@/lib/research-job";
 import { handleJobError } from "@/lib/errors/jobErrorHandler";
 import { callExternalService } from "@/lib/errors/AppError";
 import { ErrorMessages } from "@/lib/errors/messages";
 import { createAnthropicClient } from "@/lib/anthropic-client";
 import { createFirecrawlClient, SCRAPE_TIMEOUT_MS } from "@/lib/firecrawl-client";
+import {
+  PRODUCT_TYPE_LABEL,
+  hasAppStorePresence,
+  buildDiscoveryQueries,
+  type DiscoveryQuery,
+} from "@/lib/discovery-query-builder";
 import type { AppDna, AppStoreUrls, ProductType } from "@/types";
 
 const CLAUDE_MODEL = "claude-sonnet-5";
@@ -44,25 +50,6 @@ Respond with ONLY a JSON array matching this exact shape — no prose, no markdo
 }]
 
 Only include gaps that are actually stated or clearly implied in the search results — do not invent weaknesses. Return at most 6 gaps. If nothing in the search results is usable, return an empty array.`;
-
-const PRODUCT_TYPE_LABEL: Record<ProductType, string> = {
-  developer_tool: "developer tool",
-  mobile_app: "mobile app",
-  web_app: "web app",
-  saas: "SaaS tool",
-  browser_extension: "browser extension",
-  other: "tool",
-};
-
-// The product_type dropdown is set once at onboarding and is often wrong
-// for landing pages whose real product is a mobile app (e.g. a page
-// showcasing a Play Store app, manually categorized as "web_app"). DNA
-// extraction now detects actual Play Store / App Store links on the page
-// (see trigger/dna-extraction.ts) — that's a stronger, self-correcting
-// signal than the dropdown, so app-store-aware sources trust either one.
-function hasAppStorePresence(dna: AppDna, productType: ProductType): boolean {
-  return productType === "mobile_app" || !!dna.app_store_urls?.play_store || !!dna.app_store_urls?.app_store;
-}
 
 // ---------------------------------------------------------------------------
 // STEP 1 — candidate discovery, based on function, not name.
@@ -104,56 +91,6 @@ interface Candidate {
   name: string;
   source: CandidateSource;
   url?: string;
-}
-
-interface DiscoveryQuery {
-  query: string;
-  kind: "category" | "region" | "problem";
-}
-
-// ---------------------------------------------------------------------------
-// Query construction — 2-4 distinct queries per app instead of one narrow
-// phrase, each targeting a different angle: what the app DOES (category),
-// WHO/WHERE it's for (region/context), and what a user would search when
-// hunting for a solution (problem). dna.name is never used as input.
-// ---------------------------------------------------------------------------
-
-function buildDiscoveryQueries(
-  dna: AppDna,
-  productType: ProductType,
-  additionalContext: string | null
-): DiscoveryQuery[] {
-  const categoryLabel = PRODUCT_TYPE_LABEL[productType] ?? "tool";
-  const functionPhrase = extractKeyPhrase(dna.tagline, 5) || extractKeyPhrase(dna.problem, 5);
-  const audiencePhrase = extractKeyPhrase(dna.target_audience, 6);
-  const problemPhrase = extractKeyPhrase(dna.problem, 6);
-  // additional_context is free text the user typed at onboarding — the most
-  // likely place a region/language/cultural signal ("for the Manipuri
-  // community", "Quebec French speakers") shows up. Falls back to the
-  // audience phrase when it's empty.
-  const contextPhrase = extractKeyPhrase(additionalContext, 6);
-  const regionPhrase = contextPhrase || audiencePhrase;
-
-  const queries: DiscoveryQuery[] = [];
-  const seenQueries = new Set<string>();
-  const push = (query: string, kind: DiscoveryQuery["kind"]) => {
-    const key = query.trim().toLowerCase();
-    if (!key || seenQueries.has(key)) return;
-    seenQueries.add(key);
-    queries.push({ query: query.trim(), kind });
-  };
-
-  if (functionPhrase) {
-    push(`${functionPhrase} ${categoryLabel}`, "category");
-  }
-  if (regionPhrase) {
-    push(`${categoryLabel} for ${regionPhrase}`, "region");
-  }
-  if (problemPhrase) {
-    push(`${problemPhrase} app`, "problem");
-  }
-
-  return queries;
 }
 
 // SOURCE 1 — general web search (Firecrawl), across every discovery query.

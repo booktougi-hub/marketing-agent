@@ -25,6 +25,17 @@ const PRODUCT_TYPES = [
   "other",
 ] as const;
 
+// All fields optional/nullable — founder-provided context the
+// onboarding-audit agent cannot infer on its own. See SCHEMA.md.
+const conversionRetentionSchema = z.object({
+  trial_length_days: z.number().min(0).nullable().optional(),
+  has_free_tier: z.boolean().nullable().optional(),
+  onboarding_step_count: z.number().min(0).nullable().optional(),
+  known_signup_conversion_rate: z.number().min(0).max(100).nullable().optional(),
+  known_activation_rate: z.number().min(0).max(100).nullable().optional(),
+  known_churn_rate: z.number().min(0).max(100).nullable().optional(),
+});
+
 const publishingScheduleSchema = z.object({
   twitter: z.object({
     frequency: z.enum(TWITTER_FREQUENCIES),
@@ -51,6 +62,7 @@ const patchSchema = z.object({
   product_type: z.enum(PRODUCT_TYPES).optional(),
   additional_context: z.string().trim().max(5000).optional().nullable(),
   publishing_schedule: publishingScheduleSchema.optional(),
+  conversion_retention: conversionRetentionSchema.optional(),
   preferred_research_day: z.enum(RESEARCH_DAYS).optional(),
   preferred_research_hour: z.number().int().min(0).max(23).optional(),
 });
@@ -127,11 +139,29 @@ export const PATCH = withErrorHandling(async (
     if (parsed.data.additional_context !== undefined) {
       update.additional_context = parsed.data.additional_context?.trim() || null;
     }
+    // Merges onto whatever this request has already staged in `update`
+    // (not always `existing.app_settings`) — a request that touches more
+    // than one app_settings key (e.g. publishing_schedule AND
+    // conversion_retention together) must not have the second block
+    // clobber the first with stale pre-request data.
     if (parsed.data.publishing_schedule !== undefined) {
-      const currentSettings = (existing.app_settings ?? {}) as Record<string, unknown>;
+      const currentSettings = (update.app_settings ?? existing.app_settings ?? {}) as Record<
+        string,
+        unknown
+      >;
       update.app_settings = {
         ...currentSettings,
         publishing_schedule: parsed.data.publishing_schedule,
+      };
+    }
+    if (parsed.data.conversion_retention !== undefined) {
+      const currentSettings = (update.app_settings ?? existing.app_settings ?? {}) as Record<
+        string,
+        unknown
+      >;
+      update.app_settings = {
+        ...currentSettings,
+        conversion_retention: parsed.data.conversion_retention,
       };
     }
     if (parsed.data.preferred_research_day !== undefined) {

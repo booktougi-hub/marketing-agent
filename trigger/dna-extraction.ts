@@ -9,7 +9,7 @@ import { callExternalService, ExternalServiceError } from "@/lib/errors/AppError
 import { ErrorMessages } from "@/lib/errors/messages";
 import { createAnthropicClient } from "@/lib/anthropic-client";
 import { createFirecrawlClient, SCRAPE_TIMEOUT_MS } from "@/lib/firecrawl-client";
-import type { strategyGeneration } from "@/trigger/strategy-generation";
+import type { competitorResearch } from "@/trigger/competitor-research";
 
 const CLAUDE_MODEL = "claude-sonnet-5";
 
@@ -264,7 +264,7 @@ ${docTexts.length > 0 ? `=== SUPPORTING DOCUMENTS ===\n${docTexts.map((text, i) 
         .update({
           name: dna.name,
           dna,
-          status: "strategy_pending",
+          status: "competitor_research_pending",
           // Only overwrite icon_url when a new one was actually found this
           // run — a transient resolution failure on a later re-analysis
           // shouldn't null out an icon that was already found before.
@@ -273,25 +273,30 @@ ${docTexts.length > 0 ? `=== SUPPORTING DOCUMENTS ===\n${docTexts.map((text, i) 
         .eq("id", app_id)
         .eq("workspace_id", workspace_id);
 
-      logger.info("dna-extraction: app row updated to strategy_pending", { app_id });
+      logger.info("dna-extraction: app row updated to competitor_research_pending", { app_id });
 
-      const strategyHandle = await tasks.trigger<typeof strategyGeneration>("strategy-generation", {
+      // Diagnosis-first pipeline (PHASES.md, 2026-07-14): dna-extraction no
+      // longer triggers strategy-generation directly — competitor-research
+      // runs first, then diagnosis, and strategy-generation only fires once
+      // the founder acknowledges the diagnosis (see
+      // PATCH /api/apps/[id]/acknowledge-diagnosis).
+      const competitorResearchHandle = await tasks.trigger<typeof competitorResearch>("competitor-research", {
         app_id,
         workspace_id,
       });
 
       // Replaces this run's own tracking with the chained job's — dna-
       // extraction is done, so from here trigger/job-watchdog.ts should be
-      // watching strategy-generation instead.
+      // watching competitor-research instead.
       await supabaseAdmin
         .from("apps")
-        .update({ pending_run_id: strategyHandle.id, pending_run_task: "strategy-generation" })
+        .update({ pending_run_id: competitorResearchHandle.id, pending_run_task: "competitor-research" })
         .eq("id", app_id)
         .eq("workspace_id", workspace_id);
 
-      logger.info("dna-extraction: strategy-generation triggered", { app_id });
+      logger.info("dna-extraction: competitor-research triggered", { app_id });
 
-      return { app_id, status: "strategy_pending" as const };
+      return { app_id, status: "competitor_research_pending" as const };
     } catch (err) {
       await handleJobError(err, { appId: app_id, workspaceId: workspace_id, jobName: "dna-extraction" });
       throw err;

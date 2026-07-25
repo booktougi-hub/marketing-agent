@@ -28,6 +28,8 @@ const ALREADY_HANDLED_STATUSES = new Set(["COMPLETED", "FAILED"]);
 
 const TASK_LABEL: Record<PendingRunTask, string> = {
   "dna-extraction": "DNA extraction",
+  "competitor-research": "Competitor research",
+  "diagnosis": "Growth diagnosis",
   "strategy-generation": "Strategy generation",
   "content-generation": "Content generation",
   "icp-inference": "ICP inference",

@@ -10,8 +10,12 @@ const badgeVariants = cva(
     variants: {
       variant: {
         default: "bg-primary text-primary-foreground [a]:hover:bg-primary/80",
+        // Monolith Precision (DESIGN.md): chips/badges are monochromatic —
+        // a subtle neutral fill with muted text, not a colored tint. The
+        // single indigo accent is reserved for the `default` variant
+        // (active states / critical data points), never decorative chips.
         secondary:
-          "bg-secondary/10 text-secondary [a]:hover:bg-secondary/20",
+          "bg-secondary text-muted-foreground [a]:hover:bg-secondary/80",
         destructive:
           "bg-destructive/10 text-destructive focus-visible:ring-destructive/20 dark:bg-destructive/20 dark:focus-visible:ring-destructive/40 [a]:hover:bg-destructive/20",
         outline:

@@ -5,11 +5,14 @@ import { AppContentGate } from "@/components/apps/app-content-gate";
 import type { ContentWithAnalytics } from "@/components/apps/app-content-view";
 import { supabaseAdmin } from "@/lib/supabase-server";
 import { timed } from "@/lib/perf-log";
-import type { AppDna, AppStatus, StrategyContentPillar, StrategyPersona } from "@/types";
+import type { AppDna, AppStatus, DiagnosisData, StrategyContentPillar, StrategyPersona } from "@/types";
 
 const LOADING_OR_PENDING_STATUSES = new Set<AppStatus>([
   "pending",
   "extracting",
+  "competitor_research_pending",
+  "diagnosis_pending",
+  "diagnosis_ready",
   "strategy_pending",
   "awaiting_approval",
 ]);
@@ -62,7 +65,7 @@ export default async function AppContentPage({
   const { data: app } = await timed("content/page:app_row", () =>
     supabaseAdmin
       .from("apps")
-      .select("id, name, source_url, status, dna, error_message")
+      .select("id, name, source_url, status, dna, error_message, diagnosis")
       .eq("id", id)
       .eq("workspace_id", workspaceId)
       .single()
@@ -80,12 +83,13 @@ export default async function AppContentPage({
     content_pillars: StrategyContentPillar[];
     tone: string;
     channels: string[];
+    built_from_diagnosis: boolean;
   } | null = null;
   if (LOADING_OR_PENDING_STATUSES.has(status)) {
     const { data } = await timed("content/page:draft_strategy", () =>
       supabaseAdmin
         .from("strategies")
-        .select("id, personas, content_pillars, tone, channels")
+        .select("id, personas, content_pillars, tone, channels, built_from_diagnosis")
         .eq("app_id", id)
         .eq("workspace_id", workspaceId)
         .eq("status", "draft")
@@ -148,6 +152,7 @@ export default async function AppContentPage({
         workspaceId={workspaceId}
         initialStatus={status}
         initialDna={app.dna as AppDna | null}
+        initialDiagnosis={app.diagnosis as DiagnosisData | null}
         initialStrategy={draftStrategy}
         initialErrorMessage={app.error_message}
         initialContent={content}

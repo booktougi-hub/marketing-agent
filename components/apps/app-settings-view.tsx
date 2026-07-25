@@ -7,9 +7,10 @@ import { AppIdentitySection } from "@/components/apps/app-identity-section";
 import { PublishingScheduleSection } from "@/components/apps/publishing-schedule-section";
 import { ResearchScheduleSection } from "@/components/apps/research-schedule-section";
 import { ConnectedPlatformsSection } from "@/components/apps/connected-platforms-section";
+import { ConversionRetentionSection } from "@/components/apps/conversion-retention-section";
 import { DangerZoneSection } from "@/components/apps/danger-zone-section";
 import { cn } from "@/lib/utils";
-import type { PublishingScheduleSettings } from "@/lib/app-settings";
+import type { ConversionRetentionSettings, PublishingScheduleSettings } from "@/lib/app-settings";
 import type { AppStatus, ContentPlatform, PlanTier, ProductType, ResearchDay } from "@/types";
 
 interface SettingsSection {
@@ -34,6 +35,11 @@ const SECTIONS: SettingsSection[] = [
     id: "research-schedule",
     label: "Research Schedule",
     description: "Configure how often the research agent scans for new opportunities.",
+  },
+  {
+    id: "conversion-retention",
+    label: "Conversion & Retention",
+    description: "Optional context that sharpens the onboarding-audit agent's findings.",
   },
   {
     id: "notifications",
@@ -77,6 +83,7 @@ export function AppSettingsView({
   reanalysisCreditsUsed,
   reanalysisCreditsResetAt,
   publishingSchedule,
+  conversionRetention,
   devtoConnected,
   isPaused,
   appStatus,
@@ -96,6 +103,7 @@ export function AppSettingsView({
   reanalysisCreditsUsed: number;
   reanalysisCreditsResetAt: string | null;
   publishingSchedule: PublishingScheduleSettings;
+  conversionRetention: ConversionRetentionSettings;
   devtoConnected: boolean;
   isPaused: boolean;
   appStatus: AppStatus;
@@ -194,6 +202,8 @@ export function AppSettingsView({
                   initialPreferredResearchDay={preferredResearchDay}
                   initialPreferredResearchHour={preferredResearchHour}
                 />
+              ) : section.id === "conversion-retention" ? (
+                <ConversionRetentionSection appId={appId} initialSettings={conversionRetention} />
               ) : section.id === "connected-platforms" ? (
                 <ConnectedPlatformsSection appId={appId} initialDevtoConnected={devtoConnected} />
               ) : section.id === "danger-zone" ? (

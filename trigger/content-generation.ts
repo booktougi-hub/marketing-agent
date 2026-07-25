@@ -1,3 +1,10 @@
+// TODO(brand-identity): once brand_information (SCHEMA.md) is populated for
+// an app, pull its key_stats, tone_descriptors, and words_to_avoid into the
+// system prompts below — key_stats gives the LLM real, non-fabricated proof
+// points to cite, tone_descriptors sharpens voice matching beyond the DNA's
+// single `tone` enum, and words_to_avoid is a hard exclusion list the prompt
+// should never violate. Not wired in yet — extraction + Settings UI only so
+// far (see trigger/brand-info-extraction.ts).
 import { logger, schemaTask } from "@trigger.dev/sdk";
 import OpenAI from "openai";
 import type Anthropic from "@anthropic-ai/sdk";
@@ -21,12 +28,23 @@ const OPENROUTER_MODEL = "openrouter/free";
 // struggles with, and article volume is low enough that the cost is small.
 const CLAUDE_MODEL = "claude-sonnet-5";
 const DEVTO_MAX_TOKENS = 2048;
-const DEVTO_ARTICLE_COUNT = 2;
 
-const TWITTER_POST_COUNT = 15;
-const LINKEDIN_POST_COUNT = 8;
-const SCHEDULE_WINDOW_DAYS = 30;
+// Diagnosis-first redesign (PHASES.md, 2026-07-14): shifted from one 30-day
+// batch to ~7-8 days per run, so the product feels alive/current instead of
+// dumping a month of content then going quiet. Counts scaled down from the
+// old 15/8-per-30-days pace to roughly the same daily rate over a week.
+// trigger/content-regeneration-check.ts (new) re-triggers this run weekly,
+// once an app's remaining scheduled posts drop low.
+const TWITTER_POST_COUNT = 4;
+const LINKEDIN_POST_COUNT = 2;
+const SCHEDULE_WINDOW_DAYS = 7;
 const POST_HOURS_UTC = [13, 16, 20];
+// Long-form articles at the old monthly pace (2 per 30 days) would be
+// excessive weekly — scaled down to 1 per weekly run.
+const WEEKLY_DEVTO_ARTICLE_COUNT = 1;
+// How many of the freshest Topics/Problems findings to pull in per stream —
+// enough to give real variety without dominating the prompt.
+const RESEARCH_FINDINGS_PER_STREAM = 5;
 
 const payloadSchema = z.object({
   app_id: z.string(),
@@ -63,7 +81,7 @@ function buildSystemPrompt(platform: "twitter" | "linkedin", count: number) {
 
   return `You are a social media copywriter creating ${platform} posts for a software product's marketing strategy.
 
-You will be given the product's DNA (name, tagline, problem, features), its target personas, and its content pillars (each with example topics). Use this to write ${count} distinct, specific, non-repetitive posts that would genuinely resonate with the target personas.
+You will be given the product's DNA (name, tagline, problem, features), its target personas, its content pillars (each with example topics), and — when available — this week's freshest trending topics and real user problems from ongoing research. Use this to write ${count} distinct, specific, non-repetitive posts that would genuinely resonate with the target personas. When a fresh topic or real problem is available and fits a pillar, prefer it over that pillar's static example topics — this is what keeps the content current week to week instead of repeating the same angles the strategy was written with.
 
 ${constraints}
 
@@ -162,7 +180,7 @@ async function generateDevtoArticles(
   pillars: StrategyContentPillar[],
   tone: string | null
 ): Promise<{ pillar: string; body: string }[]> {
-  const selectedPillars = pillars.slice(0, DEVTO_ARTICLE_COUNT);
+  const selectedPillars = pillars.slice(0, WEEKLY_DEVTO_ARTICLE_COUNT);
   if (selectedPillars.length === 0) return [];
 
   logger.info("content-generation: generating devto articles", {
@@ -257,6 +275,44 @@ export const contentGeneration = schemaTask({
         throw new Error("No active strategy found to generate content from.");
       }
 
+      // Weekly rhythm redesign (PHASES.md, 2026-07-14): each run now also
+      // pulls in the freshest Topics/Problems research so week 3's content
+      // reflects week 3's actual trending topics, not what was trending when
+      // the strategy was first generated a month ago. This connection did
+      // not exist before — content-generation previously only read the
+      // static strategy.
+      const [{ data: topicRows }, { data: problemRows }] = await Promise.all([
+        supabaseAdmin
+          .from("research_findings")
+          .select("findings")
+          .eq("app_id", app_id)
+          .eq("workspace_id", workspace_id)
+          .eq("stream", "topic_research")
+          .eq("status", "active")
+          .order("created_at", { ascending: false })
+          .limit(RESEARCH_FINDINGS_PER_STREAM),
+        supabaseAdmin
+          .from("research_findings")
+          .select("findings")
+          .eq("app_id", app_id)
+          .eq("workspace_id", workspace_id)
+          .eq("stream", "problem_discovery")
+          .eq("status", "active")
+          .order("created_at", { ascending: false })
+          .limit(RESEARCH_FINDINGS_PER_STREAM),
+      ]);
+
+      const researchBlock =
+        (topicRows?.length ?? 0) > 0 || (problemRows?.length ?? 0) > 0
+          ? `
+
+=== THIS WEEK'S TRENDING TOPICS (prefer these over generic pillar examples when they fit) ===
+${(topicRows ?? []).map((r) => JSON.stringify(r.findings)).join("\n") || "(none this week)"}
+
+=== RECENT REAL USER PROBLEMS FOUND (prefer these over generic pillar examples when they fit) ===
+${(problemRows ?? []).map((r) => JSON.stringify(r.findings)).join("\n") || "(none this week)"}`
+          : "";
+
       const contextBlock = `=== APP DNA ===
 ${JSON.stringify(app.dna, null, 2)}
 
@@ -267,7 +323,7 @@ ${JSON.stringify(strategy.personas, null, 2)}
 ${JSON.stringify(strategy.content_pillars, null, 2)}
 
 === TONE ===
-${strategy.tone}`;
+${strategy.tone}${researchBlock}`;
 
       // Run sequentially rather than in parallel — two simultaneous calls to
       // the same free-tier model compounds rate-limit pressure.

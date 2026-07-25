@@ -1,7 +1,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { Check, ChevronsUpDown, CircleDot, Plus } from "lucide-react";
+import { ChevronsUpDown, CircleDot, Plus } from "lucide-react";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -21,6 +21,9 @@ import { NAV_ITEMS, SOCIAL_NAV_ITEMS, useDashboardApp } from "@/components/dashb
 const STATUS_LABELS: Record<AppStatus, string> = {
   pending: "Pending",
   extracting: "Extracting",
+  competitor_research_pending: "Researching",
+  diagnosis_pending: "Diagnosing",
+  diagnosis_ready: "Review",
   strategy_pending: "Strategizing",
   awaiting_approval: "Review",
   active: "Active",
@@ -32,6 +35,9 @@ const STATUS_LABELS: Record<AppStatus, string> = {
 const STATUS_DOT_CLASS: Record<AppStatus, string> = {
   pending: "text-muted-foreground",
   extracting: "text-status-warning",
+  competitor_research_pending: "text-status-warning",
+  diagnosis_pending: "text-status-warning",
+  diagnosis_ready: "text-status-warning",
   strategy_pending: "text-status-warning",
   awaiting_approval: "text-status-warning",
   active: "text-status-good",
@@ -114,7 +120,10 @@ export function AppSwitcher({
                 <DropdownMenuItem
                   key={app.id}
                   onClick={() => router.push(hrefForApp(app.id))}
-                  className="gap-2 py-1.5"
+                  className={cn(
+                    "gap-2 py-1.5",
+                    isSelected && "bg-primary/10 text-foreground focus:bg-primary/15"
+                  )}
                 >
                   <AppIcon name={name} iconUrl={app.icon_url} className="h-6 w-6 text-[10px]" />
                   <span className="min-w-0 flex-1 truncate">{name}</span>
@@ -122,7 +131,6 @@ export function AppSwitcher({
                     <CircleDot className={cn("h-2.5 w-2.5", STATUS_DOT_CLASS[app.status])} />
                     {STATUS_LABELS[app.status]}
                   </span>
-                  {isSelected && <Check className="h-3.5 w-3.5 shrink-0 text-primary" />}
                 </DropdownMenuItem>
               );
             })

@@ -1,6 +1,7 @@
 import { logger, schedules, tasks } from "@trigger.dev/sdk";
 import { supabaseAdmin } from "@/lib/supabase-server";
 import { handleJobError } from "@/lib/errors/jobErrorHandler";
+import { appRunTag } from "@/lib/jobHealthRegistry";
 
 // Competitor Gap Analysis runs monthly, not weekly, since competitor
 // pricing/positioning/reviews don't shift week to week the way trending
@@ -25,10 +26,11 @@ export const monthlyCompetitorScan = schedules.task({
       logger.info(`monthly-competitor-scan: scanning ${activeApps.length} apps`);
 
       for (const app of activeApps) {
-        await tasks.trigger("competitor-gap-analysis", {
-          app_id: app.id,
-          workspace_id: app.workspace_id,
-        });
+        await tasks.trigger(
+          "competitor-gap-analysis",
+          { app_id: app.id, workspace_id: app.workspace_id },
+          { tags: [appRunTag(app.id)] }
+        );
       }
 
       logger.info(`monthly-competitor-scan: triggered analysis for ${activeApps.length} apps`);

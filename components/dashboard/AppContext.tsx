@@ -15,7 +15,18 @@ import {
 } from "@/components/dashboard/nav-items";
 
 export type { DashboardSection, NavItem } from "@/components/dashboard/nav-items";
-export { NAV_ITEMS, SOCIAL_NAV_ITEMS, PRIMARY_NAV_LABEL, SOCIAL_NAV_LABEL } from "@/components/dashboard/nav-items";
+export {
+  NAV_ITEMS,
+  SOCIAL_NAV_ITEMS,
+  AUDIT_NAV_ITEMS,
+  ANALYTICS_NAV_ITEMS,
+  DOCUMENTATION_NAV_ITEMS,
+  PRIMARY_NAV_LABEL,
+  SOCIAL_NAV_LABEL,
+  AUDITS_NAV_LABEL,
+  ANALYTICS_NAV_LABEL,
+  DOCUMENTATION_NAV_LABEL,
+} from "@/components/dashboard/nav-items";
 
 export interface DashboardApp {
   id: string;

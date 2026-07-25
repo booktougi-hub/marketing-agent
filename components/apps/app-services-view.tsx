@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { ArrowRight } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { NAV_ITEMS } from "@/components/dashboard/nav-items";
+import { AUDIT_NAV_ITEMS, NAV_ITEMS } from "@/components/dashboard/nav-items";
 
 const SERVICE_DESCRIPTIONS: Record<string, string> = {
   content: "Generated posts and drafts for your channels.",
@@ -9,6 +9,10 @@ const SERVICE_DESCRIPTIONS: Record<string, string> = {
   outreach: "Cold email prospects and sequences.",
   research: "App DNA, competitor gaps, and topic research.",
   strategy: "Personas, content pillars, and channel plan.",
+  onboarding: "Activation friction found by the onboarding-audit agent.",
+  retention: "Cancel-flow and dunning gaps found by the churn-audit agent.",
+  conversion: "Landing page and signup friction found by the cro-audit agent.",
+  pricing: "Tier and packaging gaps found by the pricing-audit agent.",
 };
 
 export function AppServicesView({
@@ -18,9 +22,14 @@ export function AppServicesView({
   appId: string;
   appName: string;
 }) {
-  const services = NAV_ITEMS.filter(
-    (item) => item.section !== "overview" && item.section !== "settings"
-  );
+  // Includes AUDIT_NAV_ITEMS (rendered under its own sidebar group, not
+  // part of NAV_ITEMS) so this grid — the only way into any tab on
+  // mobile, via MobileBottomNav's "Services" link — stays a complete list
+  // of every section, not just the desktop sidebar's primary group.
+  const services = [
+    ...NAV_ITEMS.filter((item) => item.section !== "overview" && item.section !== "settings"),
+    ...AUDIT_NAV_ITEMS,
+  ];
 
   return (
     <div className="flex flex-col gap-6">

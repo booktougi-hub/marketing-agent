@@ -16,6 +16,9 @@ import { ThemeToggle } from "@/components/dashboard/ThemeToggle";
 const STATUS_LABELS: Record<AppStatus, string> = {
   pending: "Pending",
   extracting: "Extracting app DNA...",
+  competitor_research_pending: "Researching competitors...",
+  diagnosis_pending: "Diagnosing growth bottleneck...",
+  diagnosis_ready: "Diagnosis ready for review",
   strategy_pending: "Generating marketing strategy...",
   awaiting_approval: "Awaiting your approval",
   active: "Active",

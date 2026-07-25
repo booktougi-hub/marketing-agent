@@ -96,7 +96,7 @@ create table apps (
   dna             jsonb,                         -- extracted DNA object (see DNA schema below)
   icon_url        text,                          -- app's favicon/logo, resolved during DNA extraction; null falls back to a first-letter avatar in the UI
   status          text not null default 'pending',
-  -- status values: 'pending' | 'extracting' | 'strategy_pending' | 'awaiting_approval' | 'active' | 'paused' | 'error' | 'deleted'
+  -- status values: 'pending' | 'extracting' | 'competitor_research_pending' | 'diagnosis_pending' | 'diagnosis_ready' | 'strategy_pending' | 'awaiting_approval' | 'active' | 'paused' | 'error' | 'deleted'
   is_paused       boolean not null default false,
   error_message   text,                          -- populated if status = 'error'
   additional_context text null,                  -- optional free-text context typed by the user at onboarding
@@ -118,6 +118,10 @@ create table apps (
   first_outreach_completed boolean not null default false,  -- true once the app's first outreach ICP+preview run has been triggered
   icp_data        jsonb,                         -- { summary: string, apollo_filters: {...} } from trigger/icp-inference.ts
   icp_status      text not null default 'pending_review',  -- 'pending_review' | 'approved' | 'needs_adjustment'
+  diagnosis       jsonb,                         -- { bottleneck, reasoning, competitive_context, primary_lever, confidence } from trigger/diagnosis.ts
+  diagnosis_status text not null default 'pending',  -- 'pending' | 'shown' | 'acknowledged'
+  diagnosis_refresh_status  text not null default 'none',  -- 'none' | 'proposal_ready' | 'reviewed' — see diagnosis_proposals below
+  last_diagnosis_refresh_at timestamp with time zone,      -- when trigger/diagnosis-refresh-check.ts last actually ran for this app (set whether or not it produced a proposal), so the quarterly scan knows not to re-check early
   created_at      timestamp with time zone default now(),
   updated_at      timestamp with time zone default now()
 );
@@ -206,6 +210,23 @@ create index idx_apps_status on apps(status);
 > `first_outreach_completed = true` once its 5-prospect preview batch is
 > saved. No RLS change needed — `apps_all` already covers new columns on the
 > same row.
+>
+> **Retroactively documented (2026-07-14, alongside the migration below):**
+> `diagnosis` and `diagnosis_status` have existed since the diagnosis-first
+> pipeline redesign (`trigger/diagnosis.ts`, `PATCH /api/apps/[id]/acknowledge-diagnosis`)
+> but were never added to this file — a pre-existing SCHEMA.md gap, same
+> pattern as `competitor_research` below. Backfilled here while adding the
+> quarterly refresh columns since they're the same diagnosis-status story.
+>
+> **Migration note (2026-07-23):** `diagnosis_refresh_status` and
+> `last_diagnosis_refresh_at` were added via
+> `add_diagnosis_refresh_and_proposals` (same migration that created
+> `diagnosis_proposals` below) — `trigger/diagnosis-refresh-check.ts` runs
+> quarterly per app (or on-demand via the agent-action credit system) and
+> writes both: `last_diagnosis_refresh_at` every time it actually runs
+> (whether or not it found anything), `diagnosis_refresh_status =
+> 'proposal_ready'` only when it saved a `diagnosis_proposals` row. No RLS
+> change needed — `apps_all` already covers new columns on the same row.
 
 **DNA JSON structure (saved in `dna` column):**
 ```json
@@ -606,6 +627,500 @@ create policy "cycles_all" on optimization_cycles
 
 ---
 
+## Table: onboarding_findings
+
+Findings produced by the onboarding-audit agent (`trigger/onboarding-audit.ts`) — the first of the planned "Audits" family (onboarding now; churn and CRO audits are future work, not built yet).
+
+```sql
+create table onboarding_findings (
+  id                uuid primary key default uuid_generate_v4(),
+  app_id            uuid references apps(id) on delete cascade not null,
+  workspace_id      uuid references workspaces(id) on delete cascade not null,
+  finding_type      text not null,
+  severity          text not null check (severity in ('high', 'medium', 'low')),
+  issue_description text not null,
+  suggested_fix     text not null,
+  status            text not null default 'open' check (status in ('open', 'fixed', 'not_applicable')),
+  created_at        timestamp with time zone default now()
+);
+
+alter table onboarding_findings enable row level security;
+
+create policy "onboarding_findings_all" on onboarding_findings
+  for all using (
+    workspace_id in (
+      select workspace_id from workspace_members
+      where user_id = auth.uid()
+    )
+  );
+
+create index idx_onboarding_findings_app_id on onboarding_findings(app_id);
+create index idx_onboarding_findings_workspace_id on onboarding_findings(workspace_id);
+create index idx_onboarding_findings_status on onboarding_findings(status);
+```
+
+> **Migration note (2026-07-22):** Added via `create_onboarding_findings` — see PHASES.md's Notes Log for why this and the "Audits" nav grouping exist ahead of any listed phase. `finding_type` is free text, not a fixed enum (unlike `research_findings.stream`) — the onboarding skill's issue categories (time-to-value, activation friction, empty states, checklist design, ...) aren't a small closed set the way the five research streams are, so Claude assigns a short descriptive label per finding (e.g. `"no_onboarding_checklist"`, `"buried_signup_cta"`) rather than picking from a constrained list.
+
+---
+
+## Table: churn_findings
+
+Second of the "Audits" family, alongside `onboarding_findings` — same shape, same RLS pattern, produced by `trigger/churn-audit.ts` instead. Kept as its own table rather than a shared `audit_findings` table with a `stream`/`audit_type` column (the `research_findings` pattern) because each audit type's `finding_type` vocabulary and downstream consumers are unrelated — a shared table would just add a filter every query needs, for no real benefit yet.
+
+```sql
+create table churn_findings (
+  id                uuid primary key default uuid_generate_v4(),
+  app_id            uuid references apps(id) on delete cascade not null,
+  workspace_id      uuid references workspaces(id) on delete cascade not null,
+  finding_type      text not null,
+  severity          text not null check (severity in ('high', 'medium', 'low')),
+  issue_description text not null,
+  suggested_fix     text not null,
+  status            text not null default 'open' check (status in ('open', 'fixed', 'not_applicable')),
+  created_at        timestamp with time zone default now()
+);
+
+alter table churn_findings enable row level security;
+
+create policy "churn_findings_all" on churn_findings
+  for all using (
+    workspace_id in (
+      select workspace_id from workspace_members
+      where user_id = auth.uid()
+    )
+  );
+
+create index idx_churn_findings_app_id on churn_findings(app_id);
+create index idx_churn_findings_workspace_id on churn_findings(workspace_id);
+create index idx_churn_findings_status on churn_findings(status);
+```
+
+> **Migration note (2026-07-22):** Added via `create_churn_findings`. `finding_type` examples: `"no_cancel_flow_save_offer"`, `"no_dunning_retry_implied"`, `"paywall_friction"`. Reads `apps.app_settings.conversion_retention.known_churn_rate` (added in the same migration as `onboarding_findings`, see above) alongside DNA pricing — no new `app_settings` fields needed for this audit.
+
+---
+
+## Table: cro_findings
+
+Third and last of the "Audits" family (see PHASES.md Notes Log, 2026-07-22) — same shape as `onboarding_findings`/`churn_findings`, produced by `trigger/cro-audit.ts`. Audits the app's own landing page and signup flow, not a downstream funnel step — this is the page all of this tool's own generated marketing content actually drives traffic to.
+
+```sql
+create table cro_findings (
+  id                uuid primary key default uuid_generate_v4(),
+  app_id            uuid references apps(id) on delete cascade not null,
+  workspace_id      uuid references workspaces(id) on delete cascade not null,
+  finding_type      text not null,
+  severity          text not null check (severity in ('high', 'medium', 'low')),
+  issue_description text not null,
+  suggested_fix     text not null,
+  status            text not null default 'open' check (status in ('open', 'fixed', 'not_applicable')),
+  created_at        timestamp with time zone default now()
+);
+
+alter table cro_findings enable row level security;
+
+create policy "cro_findings_all" on cro_findings
+  for all using (
+    workspace_id in (
+      select workspace_id from workspace_members
+      where user_id = auth.uid()
+    )
+  );
+
+create index idx_cro_findings_app_id on cro_findings(app_id);
+create index idx_cro_findings_workspace_id on cro_findings(workspace_id);
+create index idx_cro_findings_status on cro_findings(status);
+```
+
+> **Migration note (2026-07-22):** Added via `create_cro_findings`. `finding_type` examples: `"too_many_signup_fields"`, `"unclear_value_proposition"`, `"no_social_proof"`, `"weak_or_buried_cta"`. Reads DNA + a live scrape of the homepage and (if discoverable) the signup page — no `app_settings` fields needed, unlike the other two audits.
+
+---
+
+## Table: pricing_findings
+
+Fourth of the "Audits" family, alongside `onboarding_findings`/`churn_findings`/`cro_findings` — same shape, produced by `trigger/pricing-audit.ts`. Audits the end user's own app's pricing/packaging, not this SaaS's own pricing.
+
+```sql
+create table pricing_findings (
+  id                uuid primary key default uuid_generate_v4(),
+  app_id            uuid references apps(id) on delete cascade not null,
+  workspace_id      uuid references workspaces(id) on delete cascade not null,
+  finding_type      text not null,
+  severity          text not null check (severity in ('high', 'medium', 'low')),
+  issue_description text not null,
+  suggested_fix     text not null,
+  status            text not null default 'open' check (status in ('open', 'fixed', 'not_applicable')),
+  created_at        timestamp with time zone default now()
+);
+
+alter table pricing_findings enable row level security;
+
+create policy "pricing_findings_all" on pricing_findings
+  for all using (
+    workspace_id in (
+      select workspace_id from workspace_members
+      where user_id = auth.uid()
+    )
+  );
+
+create index idx_pricing_findings_app_id on pricing_findings(app_id);
+create index idx_pricing_findings_workspace_id on pricing_findings(workspace_id);
+create index idx_pricing_findings_status on pricing_findings(status);
+```
+
+> **Migration note (2026-07-22):** Added via `create_pricing_findings`. `finding_type` examples: `"pricing_tier_gap_vs_competitors"`, `"unclear_tier_differentiation"`, `"price_audience_mismatch"`. Reads DNA, a live scrape of the app's own pricing page (if one exists), the `competitor_research` table's `pricing_notes`/`positioning_notes` for real competitor pricing to compare against (see that table below — surfaced here since this is the first job to actually read it, not just write it), and `apps.app_settings.conversion_retention.known_signup_conversion_rate`/`known_churn_rate`.
+
+---
+
+## Table: competitor_research
+
+> **Retroactively documented (2026-07-22):** this table has existed since the diagnosis-first pipeline redesign (2026-07-14, written by `trigger/competitor-research.ts`) but was never added to this file — a pre-existing SCHEMA.md gap, not a new migration. Backfilled here because `trigger/pricing-audit.ts` is the first job to actually *read* it (every prior consumer only wrote to it).
+
+Real, scraped competitor data — homepage + pricing page summaries — gathered once per app during onboarding by `trigger/competitor-research.ts` (part of the diagnosis-first pipeline: dna-extraction → competitor-research → diagnosis). Distinct from `research_findings` (stream = `competitor_gap`), which stores ongoing monthly *gap* findings about competitors, not their base profile.
+
+```sql
+create table competitor_research (
+  id                 uuid primary key default uuid_generate_v4(),
+  app_id             uuid references apps(id) on delete cascade not null,
+  workspace_id       uuid references workspaces(id) on delete cascade not null,
+  competitor_name    text,
+  competitor_url     text,
+  scraped_summary    text,
+  pricing_notes      text,
+  positioning_notes  text,
+  created_at         timestamp with time zone default now()
+);
+
+alter table competitor_research enable row level security;
+
+create policy "competitor_research_all" on competitor_research
+  for all using (
+    workspace_id in (
+      select workspace_id from workspace_members
+      where user_id = auth.uid()
+    )
+  );
+
+create index idx_competitor_research_app_id on competitor_research(app_id);
+create index idx_competitor_research_workspace_id on competitor_research(workspace_id);
+```
+
+> RLS and both indexes confirmed directly against the live table (`relrowsecurity = true`, policy `competitor_research_all` present with the standard `workspace_id` predicate, `idx_competitor_research_app_id`/`idx_competitor_research_workspace_id` both exist) before `trigger/pricing-audit.ts` was written to query it — this DDL reflects what's actually deployed, not a guess.
+
+---
+
+## Table: diagnosis_proposals
+
+Quarterly background re-check of the competitive landscape (`trigger/diagnosis-refresh-check.ts`) proposes an updated diagnosis here when something material changed since the app's original diagnosis — reviewed via the same acknowledge/approve UI pattern as the original diagnosis, not a new interaction model. One row per proposal; multiple historical rows per app are expected over time (old ones simply end up `accepted`/`dismissed`).
+
+```sql
+create table diagnosis_proposals (
+  id                  uuid primary key default uuid_generate_v4(),
+  app_id              uuid references apps(id) on delete cascade not null,
+  workspace_id        uuid references workspaces(id) on delete cascade not null,
+  change_summary      text not null,   -- plain-language: what changed and why it might affect the current diagnosis
+  proposed_diagnosis  jsonb not null,  -- same shape as apps.diagnosis
+  status              text not null default 'pending' check (status in ('pending', 'accepted', 'dismissed')),
+  created_at          timestamp with time zone default now()
+);
+
+alter table diagnosis_proposals enable row level security;
+
+create policy "diagnosis_proposals_all" on diagnosis_proposals
+  for all using (
+    workspace_id in (
+      select workspace_id from workspace_members
+      where user_id = auth.uid()
+    )
+  );
+
+---
+
+## Table: seo_geo_scores / seo_geo_findings
+
+SEO & GEO scoring engine — see SCORING.md for the full check registry, scoring math, and evidence citations. Two independent evaluation tracks (`track = 'seo' | 'geo'`), never blended into one score. Only the SEO track (`trigger/seo-geo-audit.ts`, `lib/seo/`) is built and populated so far; both tables' shapes already support `'geo'` rows so GEO doesn't need a second migration when it's built.
+
+```sql
+create table seo_geo_scores (
+  id            uuid primary key default uuid_generate_v4(),
+  app_id        uuid references apps(id) on delete cascade not null,
+  workspace_id  uuid references workspaces(id) on delete cascade not null,
+  page_url      text,                        -- null for brand-scope checks
+  page_id       uuid,                        -- null for brand-scope checks
+  content_id    uuid references content(id) on delete set null,  -- set when scoring a draft
+  track         text not null check (track in ('seo', 'geo')),
+  score         integer not null,            -- 0-100 composite
+  dim_scores    jsonb not null,              -- { retrievability, off_page } for SEO
+  check_results jsonb not null,              -- { check_id: { pass, value, confidence, measurable } }
+  run_at        timestamp with time zone default now()
+);
+
+alter table seo_geo_scores enable row level security;
+
+create policy "seo_geo_scores_all" on seo_geo_scores
+  for all using (
+    workspace_id in (
+      select workspace_id from workspace_members
+      where user_id = auth.uid()
+    )
+  );
+
+create index idx_seo_geo_scores_app_id on seo_geo_scores(app_id);
+create index idx_seo_geo_scores_workspace_id on seo_geo_scores(workspace_id);
+create index idx_seo_geo_scores_track on seo_geo_scores(track);
+create index idx_seo_geo_scores_run_at on seo_geo_scores(run_at);
+
+create table seo_geo_findings (
+  id                uuid primary key default uuid_generate_v4(),
+  app_id            uuid references apps(id) on delete cascade not null,
+  workspace_id      uuid references workspaces(id) on delete cascade not null,
+  page_url          text,
+  page_id           uuid,
+  content_id        uuid references content(id) on delete set null,
+  track             text not null check (track in ('seo', 'geo')),
+  check_id          text not null,           -- e.g. 'seo.sitemap.included'
+  dimension         text not null,
+  evidence_tier     integer not null check (evidence_tier in (1, 2, 3)),
+  expected_gain     double precision not null,
+  title             text not null,
+  explanation       text not null,
+  confidence_label  text not null,
+  remediation       jsonb,                   -- { type: 'diff'|'pr'|'route_to_forum'|'technical', ... }
+  status            text not null default 'open' check (status in ('open', 'applied', 'skipped')),
+  skip_count        integer not null default 0,
+  created_at        timestamp with time zone default now()
+);
+
+alter table seo_geo_findings enable row level security;
+
+create policy "seo_geo_findings_all" on seo_geo_findings
+  for all using (
+    workspace_id in (
+      select workspace_id from workspace_members
+      where user_id = auth.uid()
+    )
+  );
+
+create index idx_seo_geo_findings_app_id on seo_geo_findings(app_id);
+create index idx_seo_geo_findings_workspace_id on seo_geo_findings(workspace_id);
+create index idx_seo_geo_findings_track on seo_geo_findings(track);
+create index idx_seo_geo_findings_status on seo_geo_findings(status);
+```
+
+> **Migration note (2026-07-23):** Added via `add_seo_geo_scoring_tables`. `workspace_id` and its RLS policy were added to both tables on top of SCORING.md's own draft DDL — that spec predates this project's non-negotiable workspace_id/RLS convention (CLAUDE.md Rule #1), it wasn't a deviation from the rest of the design. `trigger/seo-geo-audit.ts` runs weekly per active app (`trigger/weekly-seo-scan.ts`) or on-demand via the `seo_audit` agent-action credit (2 credits), evaluating the app's own homepage (`apps.source_url`) plus brand-scoped off-page checks. Two checks (`seo.title.unique`, `seo.links.internal_in`) are permanently `measurable: false` in `check_results` since this tool audits one page per app, not a full site crawl — excluded from the weighted score rather than given a fabricated result. `seo.offpage.mention_trend` becomes measurable once a prior scoring run exists from ≥90 days back.
+
+create index idx_diagnosis_proposals_app_id on diagnosis_proposals(app_id);
+create index idx_diagnosis_proposals_workspace_id on diagnosis_proposals(workspace_id);
+create index idx_diagnosis_proposals_status on diagnosis_proposals(status);
+```
+
+> **Migration note (2026-07-23):** Added via `add_diagnosis_refresh_and_proposals` (same migration as `apps.diagnosis_refresh_status`/`apps.last_diagnosis_refresh_at` above). Accepting a proposal (`PATCH /api/apps/[id]/diagnosis-proposals/[proposalId]/accept`) sets this row's `status = 'accepted'`, copies `proposed_diagnosis` into `apps.diagnosis`, and re-triggers `strategy-generation` — same effect as the original diagnosis acknowledge flow, just sourced from a proposal instead of a fresh diagnosis run. Dismissing sets `status = 'dismissed'` and resets `apps.diagnosis_refresh_status` back to `'none'`, with no other changes.
+
+---
+
+## Table: brand_information
+
+One row per app, holding the customer-facing "Brand Identity" reference used by downstream content/GEO jobs (see TODO markers in `trigger/content-generation.ts` and `trigger/seo-geo-audit.ts` — not wired in yet, extraction + Settings UI only for now). Auto-populated by `trigger/brand-info-extraction.ts` from a Firecrawl scrape of the app's homepage plus (if discoverable) About/Pricing pages, then reviewed/edited/confirmed by the customer in Settings → Brand Identity. Every auto-filled field must trace back to something literally present on a scraped page — the LLM extraction prompt returns `null` rather than inventing a value, and nothing here (especially `key_stats`/`testimonial`) is ever fabricated.
+
+```sql
+create table brand_information (
+  id                    uuid primary key default uuid_generate_v4(),
+  app_id                uuid references apps(id) on delete cascade not null unique,
+  workspace_id          uuid references workspaces(id) on delete cascade not null,
+
+  -- Core identity
+  brand_name            text,
+  one_liner             text,          -- what it does, <=15 words
+  category              text,          -- vertical: health, finance, dev tools, etc.
+  website_url           text,
+  logo_url              text,          -- storage path in the 'brand-assets' bucket, after upload
+
+  -- Positioning
+  problem_solved        text,
+  target_customer       text,
+  differentiator        text,
+  known_competitors     text[],
+
+  -- Voice & tone
+  tone_descriptors      text[],        -- e.g. ['direct', 'technical', 'no fluff']
+  words_to_avoid        text[],
+  writing_sample        text,          -- optional pasted paragraph
+
+  -- Proof points
+  key_stats             jsonb,         -- [{ label, value, source_url }]
+  testimonial           text,
+  testimonial_source    text,
+  pricing_summary       jsonb,         -- [{ plan_name, price, billing_period }]
+
+  -- Channels & handles
+  social_handles        jsonb,         -- { platform: handle }
+  github_repo_url       text,
+
+  -- Founder context (optional)
+  founder_name          text,
+  founder_bio           text,
+
+  -- Guardrails
+  claims_to_avoid       text[],
+  target_regions        text[],
+
+  -- Visual identity
+  primary_color_hex     text,
+  secondary_color_hex   text,
+  font_preference       text,
+  product_screenshots   text[],        -- storage paths in the 'brand-assets' bucket
+
+  -- Metadata
+  extraction_source     jsonb,         -- { field_name: 'auto'|'manual' }
+  extraction_status     text not null default 'idle',  -- 'idle' | 'processing' | 'complete' | 'error'
+  extraction_error      text,          -- populated when extraction_status = 'error'
+  last_analyzed_at      timestamptz,
+  updated_at            timestamptz default now()
+);
+
+alter table brand_information enable row level security;
+
+create policy "brand_information_all" on brand_information
+  for all using (
+    workspace_id in (
+      select workspace_id from workspace_members
+      where user_id = auth.uid()
+    )
+  );
+
+create index idx_brand_information_app_id on brand_information(app_id);
+create index idx_brand_information_workspace_id on brand_information(workspace_id);
+```
+
+**Key stats JSON structure:**
+```json
+[{ "label": "string", "value": "string", "source_url": "string | null" }]
+```
+
+**Pricing summary JSON structure:**
+```json
+[{ "plan_name": "string", "price": "string", "billing_period": "string | null" }]
+```
+
+**Social handles JSON structure:** `{ "twitter": "@handle", "linkedin": "url", ... }` — free-form key/value, keys are whatever platform names the extraction or the customer enters, not a fixed enum.
+
+**Extraction source JSON structure:** `{ "brand_name": "auto" | "manual", "one_liner": "auto" | "manual", ... }` — one entry per top-level field that can be auto-filled, written once by `brand-info-extraction.ts` on first run (every field it successfully filled marked `"auto"`) and updated to `"manual"` by the save route whenever the customer edits that field, so a re-analyze run knows which fields it must never silently overwrite (see Part 4 confirm/diff behavior below).
+
+> **Migration note (2026-07-24):** Added via `create_brand_information`. Two deviations from the originally requested DDL, both required by this project's non-negotiable rules (CLAUDE.md Rule #1 / this file's Core Rules): added `workspace_id` (every table must have one, filtered on every query — the request's DDL only had `app_id`) and used `uuid_generate_v4()` instead of `gen_random_uuid()` for the primary key default (Core Rule #3 mandates the former; both work identically on Postgres 15, this is a consistency choice, not a functional one). Also added `extraction_status`/`extraction_error` beyond the requested columns — the async extraction job needs a way to signal "still running" / "failed, here's why" to the Settings UI, the same role `apps.status`/`apps.error_message` play for the main onboarding pipeline; without them the UI would have no way to end a loading spinner on failure. `brand-info-extraction.ts` is a side/enrichment job, not one of the three pipeline-blocking jobs (dna-extraction, strategy-generation, content-generation) — it never touches `apps.status` itself, per the convention documented in `lib/errors/jobErrorHandler.ts`.
+>
+> **Storage bucket:** `brand-assets` (public, 5MB limit, image mime types only) was created in the same migration for `logo_url`/`product_screenshots` uploads, mirroring the existing `app-docs` bucket's workspace-scoped RLS convention (`storage.foldername(name)[1]` must match a workspace the uploading user belongs to) for the INSERT policy. Unlike `app-docs`, this bucket is `public: true` — logos/screenshots render directly as `<img>` sources in the dashboard, so no SELECT policy is needed (public buckets serve reads unauthenticated, bypassing RLS). This is the first documented Storage bucket in this file; `app-docs` (see `apps.doc_paths` above) predates this convention and was created out-of-band without a written record — worth being aware of if you go looking for its provisioning history.
+
+---
+
+## Table: chat_conversations / chat_messages / pending_chat_actions
+
+Backend for the in-app chat panel (`components/dashboard/ChatPanel.tsx`, `app/api/chat/route.ts`). One `chat_conversations` row per app_id + user_id pair — switching the selected app in the UI starts a new conversation, never reuses another app's thread. `chat_messages` stores the full Anthropic content-block array per turn (including any `tool_use`/`tool_result` blocks) so a conversation can be reconstructed verbatim for the next API call, plus the response `usage` block's four token counts for cache-hit observability (see the Observability query below). `pending_chat_actions` holds a mutating tool call the model proposed but hasn't executed yet — the confirm card in the UI reads/writes this row via `app/api/chat/confirm/route.ts`; a row past `expires_at` (1 hour) is treated as expired rather than executed.
+
+```sql
+create table chat_conversations (
+  id               uuid primary key default uuid_generate_v4(),
+  app_id           uuid references apps(id) on delete cascade not null,
+  workspace_id     uuid references workspaces(id) on delete cascade not null,
+  user_id          uuid references auth.users(id) on delete cascade not null,
+  created_at       timestamp with time zone default now(),
+  last_message_at  timestamp with time zone default now()
+);
+
+alter table chat_conversations enable row level security;
+
+create policy "chat_conversations_all" on chat_conversations
+  for all using (
+    workspace_id in (
+      select workspace_id from workspace_members
+      where user_id = auth.uid()
+    )
+  );
+
+create index idx_chat_conversations_app_id on chat_conversations(app_id);
+create index idx_chat_conversations_workspace_id on chat_conversations(workspace_id);
+create index idx_chat_conversations_app_user on chat_conversations(app_id, user_id);
+
+create table chat_messages (
+  id                            uuid primary key default uuid_generate_v4(),
+  conversation_id               uuid references chat_conversations(id) on delete cascade not null,
+  workspace_id                  uuid references workspaces(id) on delete cascade not null,
+  role                          text not null check (role in ('user', 'assistant')),
+  content                       jsonb not null,        -- full content blocks, including tool_use/tool_result
+  cache_creation_input_tokens   integer,                -- from the API response usage block, for observability
+  cache_read_input_tokens       integer,
+  input_tokens                  integer,
+  output_tokens                 integer,
+  created_at                    timestamp with time zone default now()
+);
+
+alter table chat_messages enable row level security;
+
+create policy "chat_messages_all" on chat_messages
+  for all using (
+    workspace_id in (
+      select workspace_id from workspace_members
+      where user_id = auth.uid()
+    )
+  );
+
+create index idx_chat_messages_conversation_id on chat_messages(conversation_id);
+create index idx_chat_messages_workspace_id on chat_messages(workspace_id);
+create index idx_chat_messages_created_at on chat_messages(created_at);
+
+create table pending_chat_actions (
+  id               uuid primary key default uuid_generate_v4(),
+  conversation_id  uuid references chat_conversations(id) on delete cascade not null,
+  app_id           uuid references apps(id) on delete cascade not null,
+  workspace_id     uuid references workspaces(id) on delete cascade not null,
+  tool_use_id      text not null,   -- the originating tool_use block's id, so the confirm route can post a matching tool_result back into the conversation once handled
+  tool_name        text not null,
+  tool_params      jsonb not null,
+  credit_cost      integer not null,
+  status           text not null default 'pending' check (status in ('pending', 'confirmed', 'executed', 'cancelled', 'expired')),
+  created_at       timestamp with time zone default now(),
+  expires_at       timestamp with time zone default (now() + interval '1 hour')
+);
+
+alter table pending_chat_actions enable row level security;
+
+create policy "pending_chat_actions_all" on pending_chat_actions
+  for all using (
+    workspace_id in (
+      select workspace_id from workspace_members
+      where user_id = auth.uid()
+    )
+  );
+
+create index idx_pending_chat_actions_conversation_id on pending_chat_actions(conversation_id);
+create index idx_pending_chat_actions_workspace_id on pending_chat_actions(workspace_id);
+create index idx_pending_chat_actions_status on pending_chat_actions(status);
+create index idx_pending_chat_actions_expires_at on pending_chat_actions(expires_at);
+```
+
+> **Migration note (2026-07-25):** Added via `create_chat_tables`, with `tool_use_id` added to `pending_chat_actions` shortly after via `add_tool_use_id_to_pending_chat_actions` (table was still empty, so a plain `not null` add was safe). Four deviations from the originally requested DDL, same pattern as `brand_information`'s migration note above: (1) added `workspace_id` to all three tables (the request only had it implicitly via `apps`/`chat_conversations` joins — every table needs its own column so every query can filter directly instead of joining out to derive it) with the standard `..._all` RLS policy, required by CLAUDE.md Rule #1 / this file's Core Rules; (2) used `uuid_generate_v4()` instead of `gen_random_uuid()` for primary key defaults, per Core Rule #3; (3) `chat_messages.workspace_id` specifically wasn't in the request's DDL at all — added for the same direct-filter reason as (1), populated from the parent `chat_conversations` row at insert time rather than joined per-query; (4) `pending_chat_actions.tool_use_id` wasn't in the request's DDL either — without it, `app/api/chat/confirm/route.ts` has no way to post a `tool_result` block back referencing the original `tool_use` block once the founder confirms or declines, which would leave that turn's assistant message permanently missing its required tool_result on the next chat request. `idx_chat_conversations_app_user` supports the route's "load or create the conversation for this app_id + user_id" lookup on every chat request.
+
+---
+
+## `apps.app_settings` — Conversion & Retention
+
+Same untyped `app_settings` jsonb column documented under the `apps` table above — this adds a `conversion_retention` key, parsed/defaulted in `lib/app-settings.ts` the same way `publishing_schedule` already is. All fields are optional and nullable: this is founder-provided context `trigger/onboarding-audit.ts` cannot infer from DNA or a page scrape alone, so a missing value must lower the audit's confidence, never get invented.
+
+```json
+{
+  "conversion_retention": {
+    "trial_length_days": "number | null",
+    "has_free_tier": "boolean | null",
+    "onboarding_step_count": "number | null",
+    "known_signup_conversion_rate": "number | null",
+    "known_activation_rate": "number | null",
+    "known_churn_rate": "number | null"
+  }
+}
+```
+
+> **Migration note (2026-07-22):** Added via the same `PATCH /api/apps/[id]/settings` route as `publishing_schedule` — no schema change, since `app_settings` is already jsonb. Documented here per SCHEMA.md's own rule ("never guess column names") even though nothing new was added to the `apps` table itself.
+
+---
+
 ## Auto-Workspace Trigger
 
 Run this function and trigger in Supabase. It automatically creates a workspace and owner membership whenever a new user signs up. This must exist before any user can sign up.
@@ -727,4 +1242,24 @@ const { data: posts } = await supabaseAdmin
   .eq('workspace_id', workspaceId)
   .lte('scheduled_at', new Date().toISOString())
   .order('scheduled_at', { ascending: true });
+```
+
+### Chat prompt-cache observability — per-day token/cache rollup
+Equivalent to `lib/chat/observability.ts`'s `getDailyChatTokenStats` — for ad-hoc checks straight against the database. `cache_hit_rate` should be high once a conversation has more than one turn; a day where `total_cache_creation_tokens` spikes relative to prior days usually means something in `identityBlock` or `SCOPED_SYSTEM_PROMPT` changed and broke the cached prefix (see `lib/chat/assemble-context.ts` / `lib/chat/system-prompt.ts`).
+```sql
+select
+  date_trunc('day', created_at) as day,
+  sum(input_tokens) as total_input_tokens,
+  sum(cache_read_input_tokens) as total_cache_read_tokens,
+  sum(cache_creation_input_tokens) as total_cache_creation_tokens,
+  round(
+    sum(cache_read_input_tokens)::numeric
+      / nullif(sum(input_tokens) + sum(cache_read_input_tokens), 0),
+    4
+  ) as cache_hit_rate
+from chat_messages
+where workspace_id = $1
+  and created_at >= now() - interval '30 days'
+group by 1
+order by 1 desc;
 ```

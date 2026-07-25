@@ -19,7 +19,14 @@ import {
   AppContentView,
   type ContentWithAnalytics,
 } from "@/components/apps/app-content-view";
-import type { AppDna, AppStatus, StrategyContentPillar, StrategyPersona } from "@/types";
+import { DiagnosisScreen } from "@/components/apps/diagnosis-screen";
+import type {
+  AppDna,
+  AppStatus,
+  DiagnosisData,
+  StrategyContentPillar,
+  StrategyPersona,
+} from "@/types";
 
 function splitLines(value: string): string[] {
   return value
@@ -258,11 +265,20 @@ function AddPillarCard({
   );
 }
 
-const LOADING_STATUSES = new Set<AppStatus>(["pending", "extracting", "strategy_pending"]);
+const LOADING_STATUSES = new Set<AppStatus>([
+  "pending",
+  "extracting",
+  "competitor_research_pending",
+  "diagnosis_pending",
+  "strategy_pending",
+]);
 
 const STATUS_LABELS: Record<AppStatus, string> = {
   pending: "Getting ready...",
   extracting: "Extracting app DNA...",
+  competitor_research_pending: "Researching your real competitors...",
+  diagnosis_pending: "Diagnosing your biggest growth bottleneck...",
+  diagnosis_ready: "Diagnosis ready for review",
   strategy_pending: "Generating marketing strategy...",
   awaiting_approval: "Awaiting your approval",
   active: "Active",
@@ -277,6 +293,7 @@ interface StrategyPreview {
   content_pillars: StrategyContentPillar[];
   tone: string;
   channels: string[];
+  built_from_diagnosis: boolean;
 }
 
 export function AppContentGate({
@@ -284,6 +301,7 @@ export function AppContentGate({
   workspaceId,
   initialStatus,
   initialDna,
+  initialDiagnosis,
   initialStrategy,
   initialErrorMessage,
   initialContent,
@@ -292,17 +310,20 @@ export function AppContentGate({
   workspaceId: string;
   initialStatus: AppStatus;
   initialDna: AppDna | null;
+  initialDiagnosis: DiagnosisData | null;
   initialStrategy: StrategyPreview | null;
   initialErrorMessage: string | null;
   initialContent: ContentWithAnalytics[];
 }) {
   const [status, setStatus] = useState(initialStatus);
   const [dna, setDna] = useState(initialDna);
+  const [diagnosis, setDiagnosis] = useState(initialDiagnosis);
   const [strategy, setStrategy] = useState(initialStrategy);
   const [errorMessage, setErrorMessage] = useState(initialErrorMessage);
   const [actionError, setActionError] = useState<string | null>(null);
   const [approving, setApproving] = useState(false);
   const [regenerating, setRegenerating] = useState(false);
+  const [retrying, setRetrying] = useState(false);
 
   useEffect(() => {
     const channel = supabase
@@ -319,16 +340,18 @@ export function AppContentGate({
           const updated = payload.new as {
             status: AppStatus;
             dna: AppDna | null;
+            diagnosis: DiagnosisData | null;
             error_message: string | null;
           };
           setStatus(updated.status);
           setDna(updated.dna);
+          setDiagnosis(updated.diagnosis);
           setErrorMessage(updated.error_message);
 
           if (updated.status === "awaiting_approval") {
             const { data } = await supabase
               .from("strategies")
-              .select("id, personas, content_pillars, tone, channels")
+              .select("id, personas, content_pillars, tone, channels, built_from_diagnosis")
               .eq("app_id", appId)
               .eq("workspace_id", workspaceId)
               .eq("status", "draft")
@@ -363,6 +386,26 @@ export function AppContentGate({
       setActionError(err instanceof Error ? err.message : "Failed to approve strategy.");
     } finally {
       setApproving(false);
+    }
+  }
+
+  async function handleRetry() {
+    setActionError(null);
+    setRetrying(true);
+    try {
+      const response = await fetch(`/api/apps/${appId}/retry`, { method: "POST" });
+      if (!response.ok) {
+        const data = (await response.json()) as { error?: string };
+        throw new Error(data.error || "Failed to retry.");
+      }
+      // The realtime subscription above will also confirm the new status,
+      // but this avoids a flash of the stale error card while waiting for
+      // that event to arrive.
+      setErrorMessage(null);
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : "Failed to retry.");
+    } finally {
+      setRetrying(false);
     }
   }
 
@@ -451,8 +494,27 @@ export function AppContentGate({
           <p className="max-w-sm text-sm text-muted-foreground">
             {errorMessage || "Something went wrong while setting up this app."}
           </p>
+          <Button onClick={handleRetry} disabled={retrying}>
+            {retrying && <Loader2 className="animate-spin" />}
+            {retrying ? "Retrying..." : "Retry"}
+          </Button>
+          {actionError && (
+            <p role="alert" className="text-sm text-destructive">
+              {actionError}
+            </p>
+          )}
         </CardContent>
       </Card>
+    );
+  }
+
+  if (status === "diagnosis_ready" && diagnosis) {
+    return (
+      <DiagnosisScreen
+        appId={appId}
+        diagnosis={diagnosis}
+        onAcknowledged={() => setStatus("strategy_pending")}
+      />
     );
   }
 
@@ -469,6 +531,12 @@ export function AppContentGate({
             </p>
             {dna?.tagline && (
               <p className="text-sm italic text-muted-foreground">&ldquo;{dna.tagline}&rdquo;</p>
+            )}
+            {strategy.built_from_diagnosis && diagnosis && (
+              <p className="max-w-md text-xs text-muted-foreground">
+                Built from your growth diagnosis — focused on{" "}
+                <span className="font-medium text-foreground">{diagnosis.primary_lever}</span>
+              </p>
             )}
           </CardContent>
         </Card>

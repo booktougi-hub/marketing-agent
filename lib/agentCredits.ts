@@ -11,7 +11,14 @@ export type AgentActionType =
   | "topic_and_problem_research"
   | "forum_opportunity_scan"
   | "competitor_gap_analysis"
-  | "cold_email_prospecting";
+  | "cold_email_prospecting"
+  | "onboarding_audit"
+  | "churn_prevention_audit"
+  | "cro_audit"
+  | "pricing_audit"
+  | "diagnosis_refresh"
+  | "seo_audit"
+  | "brand_info_extraction";
 
 // 999 stands in for "unlimited" so the same numeric comparison works for
 // every plan. `agency` isn't in the product spec (only free/solo/growth/
@@ -32,6 +39,13 @@ export const AGENT_ACTION_COST: Record<AgentActionType, number> = {
   forum_opportunity_scan: 1,
   competitor_gap_analysis: 2,
   cold_email_prospecting: 3,
+  onboarding_audit: 2,
+  churn_prevention_audit: 2,
+  cro_audit: 2,
+  pricing_audit: 2,
+  diagnosis_refresh: 2,
+  seo_audit: 2,
+  brand_info_extraction: 2,
 };
 
 export const AGENT_ACTION_LABEL: Record<AgentActionType, string> = {
@@ -39,6 +53,13 @@ export const AGENT_ACTION_LABEL: Record<AgentActionType, string> = {
   forum_opportunity_scan: "Opportunity Scan",
   competitor_gap_analysis: "Competitor Analysis",
   cold_email_prospecting: "Cold Email Prospecting",
+  onboarding_audit: "Onboarding Audit",
+  churn_prevention_audit: "Churn Prevention Audit",
+  cro_audit: "Conversion (CRO) Audit",
+  pricing_audit: "Pricing Audit",
+  diagnosis_refresh: "Diagnosis Refresh Check",
+  seo_audit: "SEO Audit",
+  brand_info_extraction: "Brand Identity Re-analysis",
 };
 
 // cold_email_prospecting stays hard-gated by tier regardless of credits —

@@ -1,11 +1,20 @@
 import {
+  BarChart3,
+  BookOpen,
+  ClipboardCheck,
   Compass,
+  DollarSign,
   FileText,
+  HeartHandshake,
   LayoutDashboard,
+  MousePointerClick,
+  Palette,
   Search,
   Send,
   Settings,
+  Sparkles,
   Target,
+  TrendingUp,
   type LucideIcon,
 } from "lucide-react";
 import type { ContentPlatform } from "@/types";
@@ -22,7 +31,16 @@ export type DashboardSection =
   | "chat"
   | "content-youtube"
   | "content-instagram"
-  | "content-facebook";
+  | "content-facebook"
+  | "onboarding"
+  | "retention"
+  | "conversion"
+  | "pricing"
+  | "google-analytics"
+  | "seo"
+  | "geo"
+  | "product-information"
+  | "brand-information";
 
 export interface NavItem {
   section: DashboardSection;
@@ -44,6 +62,33 @@ export const NAV_ITEMS: NavItem[] = [
   { section: "research", label: "Research", href: (id) => `/dashboard/apps/${id}/research`, icon: Search },
   { section: "strategy", label: "Strategy", href: (id) => `/dashboard/apps/${id}/strategy`, icon: Target },
   { section: "settings", label: "Settings", href: (id) => `/dashboard/apps/${id}/settings`, icon: Settings },
+];
+
+// The "Documentation" family (as opposed to Strategy, which is the
+// actionable/approve-regenerate workflow). Product Information is a static,
+// read-only mirror of the raw DNA facts extracted from the app's own site.
+// Brand Information is the full editable Brand Identity feature
+// (components/apps/brand-identity-section.tsx) — auto-extracted via
+// trigger/brand-info-extraction.ts into the brand_information table, then
+// reviewed/edited/confirmed here; this used to be a read-only DNA-derived
+// summary and a separate editable "Brand Identity" Settings section, but
+// having the same concept live in two places under two different names was
+// confusing, so it's now one page. Kept separate from NAV_ITEMS, same
+// reason SOCIAL_NAV_ITEMS is: only AppSidebar renders this group under its
+// own label.
+export const DOCUMENTATION_NAV_ITEMS: NavItem[] = [
+  {
+    section: "product-information",
+    label: "Product Information",
+    href: (id) => `/dashboard/apps/${id}/product-information`,
+    icon: BookOpen,
+  },
+  {
+    section: "brand-information",
+    label: "Brand Information",
+    href: (id) => `/dashboard/apps/${id}/brand-information`,
+    icon: Palette,
+  },
 ];
 
 // Direct shortcuts into the Content tab, pre-filtered to one platform. Kept
@@ -74,8 +119,72 @@ export const SOCIAL_NAV_ITEMS: NavItem[] = [
   },
 ];
 
+// The "Audits" family — onboarding, retention, conversion, and pricing
+// (see PHASES.md Notes Log, 2026-07-22 for all four). This "pricing"
+// section audits the END USER'S app pricing/packaging — unrelated to this
+// SaaS's own billing/plan_tier (workspaces.plan_tier, /dashboard/settings)
+// even though the label is similar; the URL segments never collide since
+// this one is scoped under /dashboard/apps/[id]/. Kept separate from
+// NAV_ITEMS, same reason SOCIAL_NAV_ITEMS is: only AppSidebar renders this
+// group under its own label.
+export const AUDIT_NAV_ITEMS: NavItem[] = [
+  {
+    section: "onboarding",
+    label: "Onboarding",
+    href: (id) => `/dashboard/apps/${id}/onboarding`,
+    icon: ClipboardCheck,
+  },
+  {
+    section: "retention",
+    label: "Retention",
+    href: (id) => `/dashboard/apps/${id}/retention`,
+    icon: HeartHandshake,
+  },
+  {
+    section: "conversion",
+    label: "Conversion",
+    href: (id) => `/dashboard/apps/${id}/conversion`,
+    icon: MousePointerClick,
+  },
+  {
+    section: "pricing",
+    label: "Pricing",
+    href: (id) => `/dashboard/apps/${id}/pricing`,
+    icon: DollarSign,
+  },
+];
+
+// The "Analytics" family — Google Analytics, SEO, and GEO. Only SEO is a
+// real, working page so far (SCORING.md's SEO evaluation track); Google
+// Analytics and GEO are honest "not built yet" placeholders (see their
+// page.tsx files) rather than broken links, so the section's structure is
+// complete even though it fills in over more than one build.
+export const ANALYTICS_NAV_ITEMS: NavItem[] = [
+  {
+    section: "google-analytics",
+    label: "Google Analytics",
+    href: (id) => `/dashboard/apps/${id}/google-analytics`,
+    icon: BarChart3,
+  },
+  {
+    section: "seo",
+    label: "SEO",
+    href: (id) => `/dashboard/apps/${id}/seo`,
+    icon: TrendingUp,
+  },
+  {
+    section: "geo",
+    label: "GEO",
+    href: (id) => `/dashboard/apps/${id}/geo`,
+    icon: Sparkles,
+  },
+];
+
+export const DOCUMENTATION_NAV_LABEL = "Documentation";
 export const PRIMARY_NAV_LABEL = "Growth";
 export const SOCIAL_NAV_LABEL = "Social Content";
+export const AUDITS_NAV_LABEL = "Audits";
+export const ANALYTICS_NAV_LABEL = "Analytics";
 
 // Maps the URL segment right after /dashboard/apps/[id]/ to a section.
 // No segment (i.e. the legacy strategy-approval index route) has no nav match.
@@ -88,6 +197,15 @@ export const SEGMENT_TO_SECTION: Record<string, DashboardSection> = {
   strategy: "strategy",
   settings: "settings",
   services: "services",
+  onboarding: "onboarding",
+  retention: "retention",
+  conversion: "conversion",
+  pricing: "pricing",
+  "google-analytics": "google-analytics",
+  seo: "seo",
+  geo: "geo",
+  "product-information": "product-information",
+  "brand-information": "brand-information",
 };
 
 // Maps the `?platform=` query param on the content page to the matching

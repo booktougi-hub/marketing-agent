@@ -110,6 +110,56 @@ function asRecord(raw: unknown): Record<string, unknown> {
   return raw && typeof raw === "object" ? (raw as Record<string, unknown>) : {};
 }
 
+// The `conversion_retention` key inside `app_settings` — founder-provided
+// context trigger/onboarding-audit.ts cannot infer on its own (trial
+// length, existing conversion/activation/churn numbers, ...). Every field
+// is optional and nullable on purpose: a missing value should lower that
+// audit's confidence, never get invented. See SCHEMA.md.
+export interface ConversionRetentionSettings {
+  trial_length_days: number | null;
+  has_free_tier: boolean | null;
+  onboarding_step_count: number | null;
+  known_signup_conversion_rate: number | null;
+  known_activation_rate: number | null;
+  known_churn_rate: number | null;
+}
+
+export const DEFAULT_CONVERSION_RETENTION: ConversionRetentionSettings = {
+  trial_length_days: null,
+  has_free_tier: null,
+  onboarding_step_count: null,
+  known_signup_conversion_rate: null,
+  known_activation_rate: null,
+  known_churn_rate: null,
+};
+
+function asNullableNumber(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function asNullableBoolean(value: unknown): boolean | null {
+  return typeof value === "boolean" ? value : null;
+}
+
+export function parseConversionRetention(raw: unknown): ConversionRetentionSettings {
+  const obj = asRecord(raw);
+  return {
+    trial_length_days: asNullableNumber(obj.trial_length_days),
+    has_free_tier: asNullableBoolean(obj.has_free_tier),
+    onboarding_step_count: asNullableNumber(obj.onboarding_step_count),
+    known_signup_conversion_rate: asNullableNumber(obj.known_signup_conversion_rate),
+    known_activation_rate: asNullableNumber(obj.known_activation_rate),
+    known_churn_rate: asNullableNumber(obj.known_churn_rate),
+  };
+}
+
+// True once at least one field has a real value — used both to gate the
+// onboarding-audit prompt's confidence and to decide whether the Settings
+// card should say "optional — helps our analysis" vs. show what's saved.
+export function hasAnyConversionRetentionData(settings: ConversionRetentionSettings): boolean {
+  return Object.values(settings).some((v) => v !== null);
+}
+
 export function parsePublishingSchedule(raw: unknown): PublishingScheduleSettings {
   const obj = asRecord(raw);
   const twitterObj = asRecord(obj.twitter);

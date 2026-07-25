@@ -1,6 +1,7 @@
 import { logger, schedules, tasks } from "@trigger.dev/sdk";
 import { supabaseAdmin } from "@/lib/supabase-server";
 import { handleJobError } from "@/lib/errors/jobErrorHandler";
+import { appRunTag } from "@/lib/jobHealthRegistry";
 import { RESEARCH_DAYS } from "@/types";
 
 // This is the "next automatic scan runs [preferred day/hour]" the Research
@@ -43,10 +44,11 @@ export const weeklyResearchScan = schedules.task({
 
       for (const app of matchingApps) {
         const dated = { app_id: app.id, workspace_id: app.workspace_id };
+        const tagOptions = { tags: [appRunTag(app.id)] };
         await Promise.all([
-          tasks.trigger("topic-research", { ...dated, triggered_manually: false }),
-          tasks.trigger("problem-discovery", { ...dated, triggered_manually: false }),
-          tasks.trigger("forum-opportunity-finder", dated),
+          tasks.trigger("topic-research", { ...dated, triggered_manually: false }, tagOptions),
+          tasks.trigger("problem-discovery", { ...dated, triggered_manually: false }, tagOptions),
+          tasks.trigger("forum-opportunity-finder", dated, tagOptions),
         ]);
       }
 

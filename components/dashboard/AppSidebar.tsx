@@ -2,12 +2,18 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { ChevronsLeft, ChevronsRight, Sparkles } from "lucide-react";
+import { ChevronDown, ChevronsLeft, ChevronsRight, Sparkles } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Separator } from "@/components/ui/separator";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { AppSwitcher } from "@/components/dashboard/AppSwitcher";
 import {
+  ANALYTICS_NAV_ITEMS,
+  ANALYTICS_NAV_LABEL,
+  AUDIT_NAV_ITEMS,
+  AUDITS_NAV_LABEL,
+  DOCUMENTATION_NAV_ITEMS,
+  DOCUMENTATION_NAV_LABEL,
   NAV_ITEMS,
   PRIMARY_NAV_LABEL,
   SOCIAL_NAV_ITEMS,
@@ -92,16 +98,73 @@ function NavRow({
   );
 }
 
-function NavGroupLabel({ children, collapsed }: { children: React.ReactNode; collapsed: boolean }) {
+// Accordion header for a collapsible nav group — clicking it opens that
+// group (see AppSidebar's openGroup state). In the icon-only collapsed
+// sidebar there's no room for a label or the accordion interaction at all,
+// so every group just stays visible, separated by a divider, same as before.
+function NavGroupHeader({
+  label,
+  collapsed,
+  open,
+  onToggle,
+}: {
+  label: string;
+  collapsed: boolean;
+  open: boolean;
+  onToggle: () => void;
+}) {
   if (collapsed) {
     return <Separator className="my-1" />;
   }
   return (
-    <p className="px-2.5 pt-3 pb-1 font-mono text-[10px] font-semibold tracking-wider text-muted-foreground/70 uppercase">
-      {children}
-    </p>
+    <button
+      type="button"
+      onClick={onToggle}
+      aria-expanded={open}
+      className="flex w-full items-center justify-between rounded-md px-2.5 pt-3 pb-1 text-left font-mono text-[10px] font-semibold tracking-wider text-muted-foreground/70 uppercase transition-colors hover:text-muted-foreground"
+    >
+      {label}
+      <ChevronDown className={cn("h-3 w-3 transition-transform", !open && "-rotate-90")} />
+    </button>
   );
 }
+
+// CSS-only expand/collapse (grid-template-rows 0fr -> 1fr) — no JS height
+// measurement needed, and no children unmount so state inside a group's
+// rows never resets when it collapses.
+function NavGroupContent({ open, children }: { open: boolean; children: React.ReactNode }) {
+  return (
+    <div
+      className={cn(
+        "grid transition-[grid-template-rows] duration-200 ease-out",
+        open ? "grid-rows-[1fr]" : "grid-rows-[0fr]"
+      )}
+    >
+      <div className="flex flex-col gap-0.5 overflow-hidden">{children}</div>
+    </div>
+  );
+}
+
+interface NavGroup {
+  id: string;
+  label: string;
+  items: NavItem[];
+}
+
+// Static across the app's lifetime — computed once at module scope so
+// every consumer (and the effect below that keys off it) sees the exact
+// same array reference on every render, not a new one from re-filtering
+// NAV_ITEMS inline. A reference that changes every render would re-fire
+// that effect on every render too, fighting any manual accordion click.
+const SECTION_ITEMS = NAV_ITEMS.filter((item) => item.section !== "settings");
+const SETTINGS_ITEM = NAV_ITEMS.find((item) => item.section === "settings")!;
+const NAV_GROUPS: NavGroup[] = [
+  { id: "documentation", label: DOCUMENTATION_NAV_LABEL, items: DOCUMENTATION_NAV_ITEMS },
+  { id: "primary", label: PRIMARY_NAV_LABEL, items: SECTION_ITEMS },
+  { id: "social", label: SOCIAL_NAV_LABEL, items: SOCIAL_NAV_ITEMS },
+  { id: "audits", label: AUDITS_NAV_LABEL, items: AUDIT_NAV_ITEMS },
+  { id: "analytics", label: ANALYTICS_NAV_LABEL, items: ANALYTICS_NAV_ITEMS },
+];
 
 export function AppSidebar() {
   const { selectedApp, activeSection } = useDashboardApp();
@@ -121,11 +184,23 @@ export function AppSidebar() {
     });
   }
 
-  const sectionItems = NAV_ITEMS.filter((item) => item.section !== "settings");
-  const settingsItem = NAV_ITEMS.find((item) => item.section === "settings")!;
   const settingsHref = selectedApp
-    ? settingsItem.href(selectedApp.id)
+    ? SETTINGS_ITEM.href(selectedApp.id)
     : "/dashboard/settings";
+
+  // Accordion: exactly one group open at a time. Whenever the active page
+  // changes (navigation, app switch, direct URL), auto-open whichever group
+  // contains it so the current location is never hidden inside a collapsed
+  // section — a manual click always wins until the active section moves.
+  const [openGroup, setOpenGroup] = useState(NAV_GROUPS[0].id);
+
+  useEffect(() => {
+    if (!activeSection) return;
+    const match = NAV_GROUPS.find((group) =>
+      group.items.some((item) => item.section === activeSection)
+    );
+    if (match) setOpenGroup(match.id);
+  }, [activeSection]);
 
   return (
     <aside
@@ -189,27 +264,29 @@ export function AppSidebar() {
 
       {selectedApp ? (
         <nav className="flex flex-1 flex-col gap-0.5 overflow-y-auto p-2">
-          <NavGroupLabel collapsed={collapsed}>{PRIMARY_NAV_LABEL}</NavGroupLabel>
-          {sectionItems.map((item) => (
-            <NavRow
-              key={item.section}
-              item={item}
-              href={item.href(selectedApp.id)}
-              isActive={item.section === activeSection}
-              collapsed={collapsed}
-            />
-          ))}
-
-          <NavGroupLabel collapsed={collapsed}>{SOCIAL_NAV_LABEL}</NavGroupLabel>
-          {SOCIAL_NAV_ITEMS.map((item) => (
-            <NavRow
-              key={item.section}
-              item={item}
-              href={item.href(selectedApp.id)}
-              isActive={item.section === activeSection}
-              collapsed={collapsed}
-            />
-          ))}
+          {NAV_GROUPS.map((group) => {
+            const isOpen = openGroup === group.id;
+            const rows = group.items.map((item) => (
+              <NavRow
+                key={item.section}
+                item={item}
+                href={item.href(selectedApp.id)}
+                isActive={item.section === activeSection}
+                collapsed={collapsed}
+              />
+            ));
+            return (
+              <div key={group.id}>
+                <NavGroupHeader
+                  label={group.label}
+                  collapsed={collapsed}
+                  open={isOpen}
+                  onToggle={() => setOpenGroup(group.id)}
+                />
+                {collapsed ? rows : <NavGroupContent open={isOpen}>{rows}</NavGroupContent>}
+              </div>
+            );
+          })}
         </nav>
       ) : (
         <div className="flex-1" />
@@ -218,7 +295,7 @@ export function AppSidebar() {
       <Separator />
       <div className="flex flex-col gap-0.5 p-2">
         <NavRow
-          item={settingsItem}
+          item={SETTINGS_ITEM}
           href={settingsHref}
           isActive={activeSection === "settings"}
           collapsed={collapsed}

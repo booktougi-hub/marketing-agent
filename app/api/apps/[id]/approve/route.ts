@@ -6,6 +6,7 @@ import { supabaseAdmin } from "@/lib/supabase-server";
 import { withErrorHandling } from "@/lib/errors/apiHandler";
 import { ErrorMessages } from "@/lib/errors/messages";
 import { UnauthorizedError, ForbiddenError, NotFoundError, ValidationError } from "@/lib/errors/AppError";
+import { appRunTag } from "@/lib/jobHealthRegistry";
 import type { contentGeneration } from "@/trigger/content-generation";
 import type { topicResearch } from "@/trigger/topic-research";
 import type { problemDiscovery } from "@/trigger/problem-discovery";
@@ -98,10 +99,11 @@ export const PATCH = withErrorHandling(async (
       .eq("workspace_id", workspaceId);
 
     try {
-      const handle = await tasks.trigger<typeof contentGeneration>("content-generation", {
-        app_id: id,
-        workspace_id: workspaceId,
-      });
+      const handle = await tasks.trigger<typeof contentGeneration>(
+        "content-generation",
+        { app_id: id, workspace_id: workspaceId },
+        { tags: [appRunTag(id)] }
+      );
       await supabaseAdmin
         .from("apps")
         .update({ pending_run_id: handle.id, pending_run_task: "content-generation" })
@@ -135,13 +137,15 @@ export const PATCH = withErrorHandling(async (
           workspace_id: workspaceId,
           triggered_manually: false,
         };
+        const tagOptions = { tags: [appRunTag(id)] };
         await Promise.all([
-          tasks.trigger<typeof topicResearch>("topic-research", researchPayload),
-          tasks.trigger<typeof problemDiscovery>("problem-discovery", researchPayload),
-          tasks.trigger<typeof forumOpportunityFinder>("forum-opportunity-finder", {
-            app_id: id,
-            workspace_id: workspaceId,
-          }),
+          tasks.trigger<typeof topicResearch>("topic-research", researchPayload, tagOptions),
+          tasks.trigger<typeof problemDiscovery>("problem-discovery", researchPayload, tagOptions),
+          tasks.trigger<typeof forumOpportunityFinder>(
+            "forum-opportunity-finder",
+            { app_id: id, workspace_id: workspaceId },
+            tagOptions
+          ),
         ]);
       } catch (err) {
         console.error("Failed to trigger initial research run:", err);
