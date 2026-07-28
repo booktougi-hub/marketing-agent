@@ -1,8 +1,7 @@
-import { cookies } from "next/headers";
 import { notFound, redirect } from "next/navigation";
-import { createServerClient } from "@supabase/auth-helpers-nextjs";
 import { AppStrategyView } from "@/components/apps/app-strategy-view";
 import { supabaseAdmin } from "@/lib/supabase-server";
+import { getWorkspaceContext } from "@/lib/workspace-context";
 import { timed } from "@/lib/perf-log";
 import type { AppDna, AppStatus, Strategy } from "@/types";
 
@@ -13,68 +12,42 @@ export default async function AppStrategyPage({
 }) {
   const { id } = await params;
 
-  const cookieStore = await cookies();
-  const supabase = createServerClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-    {
-      cookies: {
-        getAll() {
-          return cookieStore.getAll();
-        },
-        setAll() {
-          // Server Components can't set cookies; middleware handles refresh.
-        },
-      },
-    }
-  );
-
-  const {
-    data: { user },
-  } = await timed("strategy/page:getUser", () => supabase.auth.getUser());
-
-  if (!user) {
+  const context = await getWorkspaceContext();
+  if (!context) {
     redirect("/auth/login");
   }
 
-  const { data: membership } = await timed("strategy/page:workspace_members", () =>
-    supabaseAdmin
-      .from("workspace_members")
-      .select("workspace_id")
-      .eq("user_id", user.id)
-      .single()
-  );
-
-  const workspaceId = membership?.workspace_id as string | undefined;
+  const { workspaceId } = context;
 
   if (!workspaceId) {
     notFound();
   }
 
-  const { data: app } = await timed("strategy/page:app_row", () =>
-    supabaseAdmin
-      .from("apps")
-      .select("id, name, source_url, status, dna")
-      .eq("id", id)
-      .eq("workspace_id", workspaceId)
-      .single()
+  // `strategy` only needs `id`/`workspaceId`, not `app` — merged into the
+  // same Promise.all instead of being awaited after it.
+  const [{ data: app }, { data: strategy }] = await timed("strategy/page:app+strategy", () =>
+    Promise.all([
+      supabaseAdmin
+        .from("apps")
+        .select("id, name, source_url, status, dna")
+        .eq("id", id)
+        .eq("workspace_id", workspaceId)
+        .single(),
+      supabaseAdmin
+        .from("strategies")
+        .select("*")
+        .eq("app_id", id)
+        .eq("workspace_id", workspaceId)
+        .eq("status", "active")
+        .order("created_at", { ascending: false })
+        .limit(1)
+        .maybeSingle(),
+    ])
   );
 
   if (!app) {
     notFound();
   }
-
-  const { data: strategy } = await timed("strategy/page:active_strategy", () =>
-    supabaseAdmin
-      .from("strategies")
-      .select("*")
-      .eq("app_id", id)
-      .eq("workspace_id", workspaceId)
-      .eq("status", "active")
-      .order("created_at", { ascending: false })
-      .limit(1)
-      .maybeSingle()
-  );
 
   return (
     <div className="flex flex-col gap-6">

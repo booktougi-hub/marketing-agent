@@ -91,7 +91,11 @@ function parseSitemapLocs(xml: string): string[] {
 
 // --- HTML/markdown parsing ----------------------------------------------
 
-function extractJsonLdBlocks(rawHtml: string): string[] {
+// Exported for reuse by lib/geo/evaluate.ts (FAQ-section detection, heading
+// structure, word counts, keyword density, and date-signal extraction are
+// all needed by GEO's rule-based checks too — same parsing, different
+// checks built on top of it).
+export function extractJsonLdBlocks(rawHtml: string): string[] {
   const matches = [...rawHtml.matchAll(/<script[^>]*type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi)];
   return matches.map((m) => m[1]);
 }
@@ -106,12 +110,12 @@ interface HeadingInfo {
   text: string;
 }
 
-function extractMarkdownHeadings(markdown: string): HeadingInfo[] {
+export function extractMarkdownHeadings(markdown: string): HeadingInfo[] {
   const matches = [...markdown.matchAll(/^(#{1,6})\s+(.+)$/gm)];
   return matches.map((m) => ({ level: m[1].length, text: m[2].trim() }));
 }
 
-function countWords(text: string): number {
+export function countWords(text: string): number {
   return text.split(/\s+/).filter(Boolean).length;
 }
 
@@ -129,7 +133,7 @@ function extractOutboundLinks(markdown: string, ownHostname: string): string[] {
   return [...hosts];
 }
 
-function keywordDensity(markdown: string, keyword: string): number {
+export function keywordDensity(markdown: string, keyword: string): number {
   if (!keyword.trim()) return 0;
   const totalWords = countWords(markdown);
   if (totalWords === 0) return 0;

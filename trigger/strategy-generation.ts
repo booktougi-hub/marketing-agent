@@ -5,9 +5,13 @@ import { handleJobError } from "@/lib/errors/jobErrorHandler";
 import { callExternalService, ExternalServiceError } from "@/lib/errors/AppError";
 import { ErrorMessages } from "@/lib/errors/messages";
 import { createAnthropicClient } from "@/lib/anthropic-client";
+import { getHighStakesSynthesisModel } from "@/lib/ai/models";
 import type { AppDna, DiagnosisData } from "@/types";
 
-const CLAUDE_MODEL = "claude-sonnet-5";
+// The other HIGH_STAKES_SYNTHESIS job (see lib/ai/models.ts and the
+// comment in trigger/diagnosis.ts) — defaults to Opus, overridable via
+// SYNTHESIS_MODEL_OVERRIDE, with the model actually used stored on
+// strategies.model below.
 
 const payloadSchema = z.object({
   app_id: z.string(),
@@ -121,9 +125,10 @@ ${diagnosis_correction}`
           : ""
       }`;
 
+      const modelUsed = getHighStakesSynthesisModel();
       const message = await callExternalService("claude", ErrorMessages.external.CLAUDE_FAILED, () =>
         anthropic.messages.create({
-          model: CLAUDE_MODEL,
+          model: modelUsed,
           max_tokens: 4096,
           system: SYSTEM_PROMPT,
           messages: [{ role: "user", content: userMessage }],
@@ -164,6 +169,7 @@ ${diagnosis_correction}`
         status: "draft",
         diagnosis_snapshot: diagnosisData,
         built_from_diagnosis: true,
+        model: modelUsed,
       });
 
       if (insertError) {

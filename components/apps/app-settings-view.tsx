@@ -7,10 +7,9 @@ import { AppIdentitySection } from "@/components/apps/app-identity-section";
 import { PublishingScheduleSection } from "@/components/apps/publishing-schedule-section";
 import { ResearchScheduleSection } from "@/components/apps/research-schedule-section";
 import { ConnectedPlatformsSection } from "@/components/apps/connected-platforms-section";
-import { ConversionRetentionSection } from "@/components/apps/conversion-retention-section";
 import { DangerZoneSection } from "@/components/apps/danger-zone-section";
 import { cn } from "@/lib/utils";
-import type { ConversionRetentionSettings, PublishingScheduleSettings } from "@/lib/app-settings";
+import type { PublishingScheduleSettings } from "@/lib/app-settings";
 import type { AppStatus, ContentPlatform, PlanTier, ProductType, ResearchDay } from "@/types";
 
 interface SettingsSection {
@@ -35,16 +34,6 @@ const SECTIONS: SettingsSection[] = [
     id: "research-schedule",
     label: "Research Schedule",
     description: "Configure how often the research agent scans for new opportunities.",
-  },
-  {
-    id: "conversion-retention",
-    label: "Conversion & Retention",
-    description: "Optional context that sharpens the onboarding-audit agent's findings.",
-  },
-  {
-    id: "notifications",
-    label: "Notifications",
-    description: "Choose which updates you want to be notified about.",
   },
   {
     id: "connected-platforms",
@@ -76,6 +65,7 @@ export function AppSettingsView({
   appId,
   appName,
   sourceUrl,
+  screenshotUrl,
   productType,
   additionalContext,
   urlChangedAt,
@@ -83,7 +73,6 @@ export function AppSettingsView({
   reanalysisCreditsUsed,
   reanalysisCreditsResetAt,
   publishingSchedule,
-  conversionRetention,
   devtoConnected,
   isPaused,
   appStatus,
@@ -96,6 +85,7 @@ export function AppSettingsView({
   appId: string;
   appName: string | null;
   sourceUrl: string;
+  screenshotUrl: string | null;
   productType: ProductType;
   additionalContext: string | null;
   urlChangedAt: string | null;
@@ -103,7 +93,6 @@ export function AppSettingsView({
   reanalysisCreditsUsed: number;
   reanalysisCreditsResetAt: string | null;
   publishingSchedule: PublishingScheduleSettings;
-  conversionRetention: ConversionRetentionSettings;
   devtoConnected: boolean;
   isPaused: boolean;
   appStatus: AppStatus;
@@ -182,6 +171,7 @@ export function AppSettingsView({
                   appId={appId}
                   initialName={appName}
                   sourceUrl={sourceUrl}
+                  screenshotUrl={screenshotUrl}
                   initialProductType={productType}
                   initialAdditionalContext={additionalContext}
                   urlChangedAt={urlChangedAt}
@@ -202,8 +192,6 @@ export function AppSettingsView({
                   initialPreferredResearchDay={preferredResearchDay}
                   initialPreferredResearchHour={preferredResearchHour}
                 />
-              ) : section.id === "conversion-retention" ? (
-                <ConversionRetentionSection appId={appId} initialSettings={conversionRetention} />
               ) : section.id === "connected-platforms" ? (
                 <ConnectedPlatformsSection appId={appId} initialDevtoConnected={devtoConnected} />
               ) : section.id === "danger-zone" ? (

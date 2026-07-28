@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { AlertTriangle, CheckCircle2, ChevronDown, Loader2, MinusCircle, XCircle } from "lucide-react";
+import { ChevronDown, Loader2 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
@@ -23,13 +23,6 @@ interface HealthResponse {
   overallStatus: "all_ok" | "attention_needed";
 }
 
-const STATUS_ICON: Record<JobHealthStatus, typeof CheckCircle2> = {
-  ok: CheckCircle2,
-  overdue: AlertTriangle,
-  failed: XCircle,
-  never_run: MinusCircle,
-};
-
 // Same color-mix-over-CSS-var badge pattern as AuditFindingCard's severity
 // badges (components/apps/audit-finding-card.tsx), so status colors read
 // consistently with the rest of the app rather than introducing a second
@@ -41,11 +34,29 @@ const STATUS_COLOR_VAR: Record<JobHealthStatus, string> = {
   never_run: "var(--muted-foreground)",
 };
 
+// A filled dot for anything that has run at least once, a hollow ring for
+// never_run — mirrors the filled/dashed-outline distinction used elsewhere
+// for "real" vs. "not yet" state (e.g. PlatformChannelIdentity vs.
+// PlatformInfluencerCandidateCard's avatar treatments).
+function StatusDot({ status }: { status: JobHealthStatus }) {
+  const color = STATUS_COLOR_VAR[status];
+  if (status === "never_run") {
+    return <span className="size-2.5 shrink-0 rounded-full border-2" style={{ borderColor: color }} />;
+  }
+  return <span className="size-2.5 shrink-0 rounded-full" style={{ backgroundColor: color }} />;
+}
+
 function statusRowText(job: JobHealthResult): string {
   if (job.status === "never_run") return "Never run yet";
   if (job.status === "failed") return "Failed";
   if (job.lastRunAt) return `Last run: ${formatTimeAgo(job.lastRunAt)}`;
   return "Never run yet";
+}
+
+function chunkPairs<T>(items: T[]): T[][] {
+  const pairs: T[][] = [];
+  for (let i = 0; i < items.length; i += 2) pairs.push(items.slice(i, i + 2));
+  return pairs;
 }
 
 export function AppSystemHealthCard({ appId }: { appId: string }) {
@@ -121,6 +132,7 @@ export function AppSystemHealthCard({ appId }: { appId: string }) {
   }
 
   const isAllOk = data.overallStatus === "all_ok";
+  const badgeColor = STATUS_COLOR_VAR[isAllOk ? "ok" : "overdue"];
 
   return (
     <Card>
@@ -131,14 +143,15 @@ export function AppSystemHealthCard({ appId }: { appId: string }) {
           setExpanded((v) => !v);
         }}
       >
-        <div className="flex items-center gap-2">
-          <span className="text-base font-semibold">System Health</span>
+        <div className="flex items-center gap-3">
+          <span className="text-xl font-bold tracking-tight">System Health</span>
           <Badge
             variant="outline"
-            className="border-transparent font-medium"
+            className="gap-1 text-[10px] font-semibold tracking-wider uppercase"
             style={{
-              backgroundColor: `color-mix(in oklch, ${STATUS_COLOR_VAR[isAllOk ? "ok" : "overdue"]} 16%, transparent)`,
-              color: STATUS_COLOR_VAR[isAllOk ? "ok" : "overdue"],
+              borderColor: badgeColor,
+              color: badgeColor,
+              backgroundColor: `color-mix(in oklch, ${badgeColor} 8%, transparent)`,
             }}
           >
             {isAllOk ? "All systems OK" : "Needs attention"}
@@ -148,40 +161,50 @@ export function AppSystemHealthCard({ appId }: { appId: string }) {
       </CardHeader>
 
       {expanded && (
-        <CardContent className="flex flex-col gap-1 pt-0">
-          {data.jobs.map((job) => {
-            const Icon = STATUS_ICON[job.status];
-            return (
-              <div
-                key={job.jobName}
-                className="flex items-center justify-between gap-3 border-t py-2.5 first:border-t-0"
-              >
-                <div className="flex items-center gap-2">
-                  <Icon className="size-4 shrink-0" style={{ color: STATUS_COLOR_VAR[job.status] }} />
-                  <span className="text-sm">{job.label}</span>
-                </div>
-                <div className="flex shrink-0 items-center gap-2">
-                  <span className="text-xs text-muted-foreground">{statusRowText(job)}</span>
-                  {job.status === "failed" && (
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="sm"
-                      className="h-7 px-2 text-xs"
-                      disabled={retryingJob !== null}
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        handleRetry(job.jobName);
-                      }}
+        <CardContent className="flex flex-col pt-0">
+          {chunkPairs(data.jobs).map((pair, rowIndex) => (
+            <div key={pair[0].jobName} className={cn(rowIndex > 0 && "border-t")}>
+              <div className="flex flex-col divide-y sm:flex-row sm:divide-x sm:divide-y-0">
+                {pair.map((job) => (
+                  <div
+                    key={job.jobName}
+                    className="flex flex-1 flex-col gap-1.5 py-3.5 sm:px-6 first:sm:pl-0 last:sm:pr-0"
+                  >
+                    <div className="flex items-center gap-2.5">
+                      <StatusDot status={job.status} />
+                      <span className="text-sm font-semibold">{job.label}</span>
+                    </div>
+                    <span
+                      className={cn(
+                        "pl-5 font-mono text-[11px] tracking-wide text-muted-foreground uppercase",
+                        job.status === "never_run" && "italic"
+                      )}
                     >
-                      {retryingJob === job.jobName && <Loader2 className="animate-spin" />}
-                      Retry
-                    </Button>
-                  )}
-                </div>
+                      {statusRowText(job)}
+                    </span>
+                    {job.status === "failed" && (
+                      <div className="pl-5">
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          className="h-7 px-2 text-xs"
+                          disabled={retryingJob !== null}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleRetry(job.jobName);
+                          }}
+                        >
+                          {retryingJob === job.jobName && <Loader2 className="animate-spin" />}
+                          Retry
+                        </Button>
+                      </div>
+                    )}
+                  </div>
+                ))}
               </div>
-            );
-          })}
+            </div>
+          ))}
           {retryError && <p className="pt-2 text-xs text-destructive">{retryError}</p>}
         </CardContent>
       )}

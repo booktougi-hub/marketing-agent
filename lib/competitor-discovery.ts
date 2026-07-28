@@ -6,6 +6,7 @@ import { createFirecrawlClient, SCRAPE_TIMEOUT_MS } from "@/lib/firecrawl-client
 import { buildDiscoveryQueries } from "@/lib/discovery-query-builder";
 import { callExternalService } from "@/lib/errors/AppError";
 import { ErrorMessages } from "@/lib/errors/messages";
+import { MODELS } from "@/lib/ai/models";
 import type { AppDna, ProductType } from "@/types";
 
 // Discover-scrape-summarize competitor logic — extracted from
@@ -17,7 +18,7 @@ import type { AppDna, ProductType } from "@/types";
 // triggering diagnosis, flipping apps.status). One function, two callers —
 // per CLAUDE.md, never duplicate a job's logic across files.
 
-const CLAUDE_MODEL = "claude-sonnet-5";
+const CLAUDE_MODEL: string = MODELS.STANDARD;
 const MAX_FINALISTS = 3;
 
 export interface DiscoveredCompetitor {

@@ -9,9 +9,10 @@ import { callExternalService, ExternalServiceError } from "@/lib/errors/AppError
 import { ErrorMessages } from "@/lib/errors/messages";
 import { createAnthropicClient } from "@/lib/anthropic-client";
 import { createFirecrawlClient, SCRAPE_TIMEOUT_MS } from "@/lib/firecrawl-client";
+import { MODELS } from "@/lib/ai/models";
 import type { competitorResearch } from "@/trigger/competitor-research";
 
-const CLAUDE_MODEL = "claude-sonnet-5";
+const CLAUDE_MODEL: string = MODELS.STANDARD;
 
 const payloadSchema = z.object({
   app_id: z.string(),
@@ -120,22 +121,30 @@ export const dnaExtraction = schemaTask({
 
       let scrapedMarkdown = "";
       let iconUrl: string | null = null;
+      let screenshotUrl: string | null = null;
       logger.info("dna-extraction: scraping URL", { source_url });
       try {
         const scraped = await firecrawl.scrapeUrl(source_url, {
           // "html" is Firecrawl's cleaned main-content extraction — it
           // strips <head> entirely, so favicon <link> tags never appear
           // there. "rawHtml" is the true unprocessed source and is what
-          // icon resolution below actually needs.
-          formats: ["markdown", "rawHtml"],
+          // icon resolution below actually needs. "screenshot" (viewport
+          // only, not "screenshot@fullPage") piggybacks on this same
+          // request for Settings > App Identity's live-preview box — no
+          // extra Firecrawl call.
+          formats: ["markdown", "rawHtml", "screenshot"],
           timeout: SCRAPE_TIMEOUT_MS,
         });
         if ("markdown" in scraped && scraped.markdown) {
           scrapedMarkdown = scraped.markdown;
         }
+        if ("screenshot" in scraped && scraped.screenshot) {
+          screenshotUrl = scraped.screenshot;
+        }
         logger.info("dna-extraction: scrape finished", {
           got_markdown: !!scrapedMarkdown,
           markdown_length: scrapedMarkdown.length,
+          got_screenshot: !!screenshotUrl,
         });
 
         // Favicon/logo resolution failing is never fatal to DNA extraction —
@@ -265,10 +274,12 @@ ${docTexts.length > 0 ? `=== SUPPORTING DOCUMENTS ===\n${docTexts.map((text, i) 
           name: dna.name,
           dna,
           status: "competitor_research_pending",
-          // Only overwrite icon_url when a new one was actually found this
-          // run — a transient resolution failure on a later re-analysis
-          // shouldn't null out an icon that was already found before.
+          // Only overwrite icon_url/screenshot_url when a new one was
+          // actually found this run — a transient resolution/scrape
+          // failure on a later re-analysis shouldn't null out an icon or
+          // screenshot that was already found before.
           ...(iconUrl ? { icon_url: iconUrl } : {}),
+          ...(screenshotUrl ? { screenshot_url: screenshotUrl } : {}),
         })
         .eq("id", app_id)
         .eq("workspace_id", workspace_id);

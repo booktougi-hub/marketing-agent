@@ -6,7 +6,7 @@
 // should never violate. Not wired in yet — extraction + Settings UI only so
 // far (see trigger/brand-info-extraction.ts).
 import { logger, schemaTask } from "@trigger.dev/sdk";
-import OpenAI from "openai";
+import OpenAI, { BadRequestError, NotFoundError, RateLimitError } from "openai";
 import type Anthropic from "@anthropic-ai/sdk";
 import { z } from "zod";
 import { supabaseAdmin } from "@/lib/supabase-server";
@@ -15,18 +15,34 @@ import { handleJobError } from "@/lib/errors/jobErrorHandler";
 import { callExternalService, ExternalServiceError } from "@/lib/errors/AppError";
 import { ErrorMessages } from "@/lib/errors/messages";
 import { createAnthropicClient } from "@/lib/anthropic-client";
+import { MODELS } from "@/lib/ai/models";
 import type { AppDna, StrategyContentPillar } from "@/types";
 
-// Routes across whichever free-tier models currently have capacity, instead
-// of pinning to one popular model (meta-llama/llama-3.3-70b-instruct:free)
-// that gets rate-limited under free-tier load.
-const OPENROUTER_MODEL = "openrouter/free";
+// Pinned, predictable model for public-facing brand content — per
+// MODELS.BULK_CONTENT_FREE (lib/ai/models.ts). The previous unpinned
+// "openrouter/free" routing alias was a deliberate choice to dodge
+// rate-limiting under free-tier load, not an oversight — that protection
+// is preserved below as an explicit fallback (see
+// createOpenRouterCompletion), attempted only after the pinned model
+// itself is rate-limited OR no longer exists, with the fallback path
+// logged so it's visible how often it actually triggers in practice.
+//
+// 2026-07-27: both this model and the old FALLBACK_OPENROUTER_MODEL value
+// ("openrouter/free") had been silently retired by OpenRouter — every
+// call was failing instantly with a model-not-found error, breaking
+// content generation for every app (see lib/ai/models.ts's comment on
+// BULK_CONTENT_FREE for the full incident note). That's why the fallback
+// trigger below now also covers NotFoundError/BadRequestError, not just
+// RateLimitError — a retired/renamed model is a real, recurring failure
+// mode on OpenRouter's free tier, not just rate-limiting.
+const OPENROUTER_MODEL: string = MODELS.BULK_CONTENT_FREE;
+const FALLBACK_OPENROUTER_MODEL = "nvidia/nemotron-3-ultra-550b-a55b:free";
 
 // Devto articles use Claude, not the free OpenRouter tier the short-form
 // posts below use — long-form structured Markdown (headers, tables, cited
 // links, varied prose) is exactly the harder formatting task the free tier
 // struggles with, and article volume is low enough that the cost is small.
-const CLAUDE_MODEL = "claude-sonnet-5";
+const CLAUDE_MODEL: string = MODELS.STANDARD;
 const DEVTO_MAX_TOKENS = 2048;
 
 // Diagnosis-first redesign (PHASES.md, 2026-07-14): shifted from one 30-day
@@ -104,6 +120,34 @@ const MAX_TOKENS_BY_PLATFORM: Record<"twitter" | "linkedin", number> = {
   linkedin: 8192,
 };
 
+// Tries the pinned MODELS.BULK_CONTENT_FREE first; falls back to a second
+// pinned free model only if the primary is rate-limited (429) OR has
+// itself become unavailable — OpenRouter periodically retires free-tier
+// models without notice (see the 2026-07-27 incident note above), and a
+// retired model surfaces as a 404/400 (NotFoundError/BadRequestError),
+// not a 429. Both fallback models stay explicitly pinned — never an
+// unpinned "whichever has capacity" alias — for anything that produces
+// public-facing brand content. Logs whenever the fallback actually
+// fires, so real-world frequency is visible rather than assumed.
+async function createOpenRouterCompletion(
+  openrouter: OpenAI,
+  platform: "twitter" | "linkedin",
+  params: Omit<OpenAI.Chat.ChatCompletionCreateParamsNonStreaming, "model">
+): Promise<OpenAI.Chat.ChatCompletion> {
+  try {
+    return await openrouter.chat.completions.create({ ...params, model: OPENROUTER_MODEL });
+  } catch (err) {
+    const primaryModelUnavailable =
+      err instanceof RateLimitError || err instanceof NotFoundError || err instanceof BadRequestError;
+    if (!primaryModelUnavailable) throw err;
+    logger.warn(
+      `content-generation: "${OPENROUTER_MODEL}" unavailable (${err.constructor.name}) generating ${platform} posts — falling back to "${FALLBACK_OPENROUTER_MODEL}" for this call`,
+      { platform, pinnedModel: OPENROUTER_MODEL, fallbackModel: FALLBACK_OPENROUTER_MODEL, errorType: err.constructor.name }
+    );
+    return openrouter.chat.completions.create({ ...params, model: FALLBACK_OPENROUTER_MODEL });
+  }
+}
+
 async function generatePosts(
   openrouter: OpenAI,
   platform: "twitter" | "linkedin",
@@ -116,8 +160,7 @@ async function generatePosts(
     "openrouter",
     ErrorMessages.external.OPENROUTER_FAILED,
     () =>
-      openrouter.chat.completions.create({
-        model: OPENROUTER_MODEL,
+      createOpenRouterCompletion(openrouter, platform, {
         max_tokens: MAX_TOKENS_BY_PLATFORM[platform],
         messages: [
           { role: "system", content: buildSystemPrompt(platform, count) },

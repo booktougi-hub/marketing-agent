@@ -5,13 +5,13 @@ import { handleJobError } from "@/lib/errors/jobErrorHandler";
 import { callExternalService, ExternalServiceError } from "@/lib/errors/AppError";
 import { ErrorMessages } from "@/lib/errors/messages";
 import { createAnthropicClient } from "@/lib/anthropic-client";
+import { MODELS } from "@/lib/ai/models";
 import type { outreachPreview } from "@/trigger/outreach-preview";
 import type { AppDna, StrategyPersona } from "@/types";
 
-// Spec called for "claude-sonnet-4-20250514" — CLAUDE.md is explicit and
-// non-negotiable: always claude-sonnet-5, never a different model string.
-// Every other job in this codebase already follows that; this one does too.
-const CLAUDE_MODEL = "claude-sonnet-5";
+// Multi-input synthesis (DNA + persona) but narrower scope/downstream
+// leverage than diagnosis/strategy — stays on the SYNTHESIS tier.
+const CLAUDE_MODEL: string = MODELS.SYNTHESIS;
 
 const adjustmentSchema = z.object({
   company_stage: z.enum(["bootstrapped", "funded", "established"]).nullable(),

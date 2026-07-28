@@ -7,7 +7,7 @@ import { z } from "zod";
 import { createAnthropicClient } from "@/lib/anthropic-client";
 import { supabaseAdmin } from "@/lib/supabase-server";
 import { assembleIdentityBlock } from "@/lib/chat/assemble-context";
-import { SCOPED_SYSTEM_PROMPT } from "@/lib/chat/system-prompt";
+import { DECLINE_MARKER, SCOPED_SYSTEM_PROMPT } from "@/lib/chat/system-prompt";
 import {
   CLAUDE_TOOL_DEFINITIONS,
   MUTATING_TOOL_HANDLERS,
@@ -25,9 +25,10 @@ import {
 import { withErrorHandling } from "@/lib/errors/apiHandler";
 import { ErrorMessages } from "@/lib/errors/messages";
 import { callExternalService, ForbiddenError, NotFoundError, RateLimitError, UnauthorizedError, ValidationError } from "@/lib/errors/AppError";
+import { MODELS } from "@/lib/ai/models";
 import type { ChatMessage, PlanTier } from "@/types";
 
-const CLAUDE_MODEL = "claude-sonnet-5";
+const CLAUDE_MODEL: string = MODELS.STANDARD;
 const MAX_TOKENS = 1024;
 
 const postSchema = z.object({
@@ -258,23 +259,50 @@ export const POST = withErrorHandling(async (request: NextRequest) => {
   let replyMessage: ChatMessage;
 
   if (toolUseBlocks.length === 0 || firstResponse.stop_reason !== "tool_use") {
-    // Plain text answer (this also covers an off-topic redirect — the
-    // coordinator produces both as ordinary text per SCOPED_SYSTEM_PROMPT,
-    // no separate handling needed) and the rare refusal stop_reason.
+    // Plain text answer — this also covers an off-topic redirect, which the
+    // coordinator produces as ordinary text per SCOPED_SYSTEM_PROMPT, marked
+    // with a leading DECLINE_MARKER token so this code can tell the two
+    // apart without a second classification call (see that constant's
+    // comment in lib/chat/system-prompt.ts). The rare refusal stop_reason
+    // also lands here.
     const text = firstResponse.content
       .filter((block): block is Anthropic.TextBlock => block.type === "text")
       .map((block) => block.text)
       .join("\n")
       .trim();
 
+    const isDecline = text.startsWith(DECLINE_MARKER);
+    const displayText = isDecline ? text.slice(DECLINE_MARKER.length).trim() : text;
+
+    // The marker must never reach a persisted row — chat_messages.content is
+    // replayed verbatim on reload (see reconstructChatMessages) and fed back
+    // to Claude as conversation history on the next turn, so it's stripped
+    // here too, not just from the live replyMessage below.
+    const persistedContent = isDecline
+      ? firstResponse.content.map((block) =>
+          block.type === "text" && block.text.trim().startsWith(DECLINE_MARKER)
+            ? { ...block, text: block.text.trim().slice(DECLINE_MARKER.length).trim() }
+            : block
+        )
+      : firstResponse.content;
+
+    if (isDecline) {
+      await supabaseAdmin.from("chat_declines").insert({
+        conversation_id: conversationId,
+        app_id: appId,
+        workspace_id: workspaceId,
+        user_message: message,
+      });
+    }
+
     replyMessage = {
       id: randomUUID(),
       role: "assistant",
       kind: "text",
-      content: text || "Sorry, I couldn't come up with an answer for that.",
+      content: displayText || "Sorry, I couldn't come up with an answer for that.",
       createdAt: new Date().toISOString(),
     };
-    rowsToPersist.push({ role: "assistant", content: firstResponse.content });
+    rowsToPersist.push({ role: "assistant", content: persistedContent });
   } else {
     const mutatingBlock = toolUseBlocks.find((block) => isMutatingTool(block.name));
 

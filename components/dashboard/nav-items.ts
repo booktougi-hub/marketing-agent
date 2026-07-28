@@ -154,11 +154,11 @@ export const AUDIT_NAV_ITEMS: NavItem[] = [
   },
 ];
 
-// The "Analytics" family — Google Analytics, SEO, and GEO. Only SEO is a
-// real, working page so far (SCORING.md's SEO evaluation track); Google
-// Analytics and GEO are honest "not built yet" placeholders (see their
-// page.tsx files) rather than broken links, so the section's structure is
-// complete even though it fills in over more than one build.
+// The "Analytics" family — Google Analytics, SEO, and GEO. SEO and GEO are
+// both real, working pages now (SCORING.md's two evaluation tracks, one
+// engine — see trigger/seo-geo-audit.ts). Google Analytics is still an
+// honest "not built yet" placeholder (see its page.tsx) rather than a
+// broken link, pending a Google Cloud OAuth client.
 export const ANALYTICS_NAV_ITEMS: NavItem[] = [
   {
     section: "google-analytics",

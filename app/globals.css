@@ -167,7 +167,12 @@
   --tertiary-container: #262626;
   --on-tertiary-container: #d4d4d4;
   --border: #262626;
-  --input: #0a0a0a;
+  /* Was #0a0a0a — nearly identical to --background, which made every
+     Input/Textarea/Select's border-input effectively invisible. DESIGN.md's
+     own spec ("Input Fields: 1px hairline border...") means this should be
+     the same #262626 hairline as --border/Card, not a second near-black
+     value — this was the actual bug, not a one-page styling gap. */
+  --input: #262626;
   --ring: #4f46e5;
   --chart-1: #3987e5;
   --chart-2: #199e70;

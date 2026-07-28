@@ -1,8 +1,7 @@
-import { cookies } from "next/headers";
 import { notFound, redirect } from "next/navigation";
-import { createServerClient } from "@supabase/auth-helpers-nextjs";
 import { AppResearchView } from "@/components/apps/app-research-view";
 import { supabaseAdmin } from "@/lib/supabase-server";
+import { getWorkspaceContext } from "@/lib/workspace-context";
 import { getLatestMonthRows, getLatestWeekRows } from "@/lib/research";
 import type { AppDna, ContentPlatform, PlanTier, ResearchDay, ResearchFinding } from "@/types";
 
@@ -15,43 +14,28 @@ export default async function AppResearchPage({
 }) {
   const { id } = await params;
 
-  const cookieStore = await cookies();
-  const supabase = createServerClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-    {
-      cookies: {
-        getAll() {
-          return cookieStore.getAll();
-        },
-        setAll() {
-          // Server Components can't set cookies; middleware handles refresh.
-        },
-      },
-    }
-  );
-
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-
-  if (!user) {
+  const context = await getWorkspaceContext();
+  if (!context) {
     redirect("/auth/login");
   }
 
-  const { data: membership } = await supabaseAdmin
-    .from("workspace_members")
-    .select("workspace_id")
-    .eq("user_id", user.id)
-    .single();
-
-  const workspaceId = membership?.workspace_id as string | undefined;
+  const { workspaceId } = context;
 
   if (!workspaceId) {
     notFound();
   }
 
-  const [{ data: app }, { data: workspace }] = await Promise.all([
+  // All four queries below only need `id`/`workspaceId`, already known at
+  // this point — merged into the app/workspace batch (rather than awaited
+  // afterward) so this page pays for one round-trip stage instead of two.
+  const [
+    { data: app },
+    { data: workspace },
+    { data: topicRows },
+    { data: problemRows },
+    { data: competitorRows },
+    { data: draftRows },
+  ] = await Promise.all([
     supabaseAdmin
       .from("apps")
       .select(
@@ -61,42 +45,38 @@ export default async function AppResearchPage({
       .eq("workspace_id", workspaceId)
       .single(),
     supabaseAdmin.from("workspaces").select("plan_tier").eq("id", workspaceId).single(),
+    supabaseAdmin
+      .from("research_findings")
+      .select("id, findings, status, week_of, created_at")
+      .eq("app_id", id)
+      .eq("workspace_id", workspaceId)
+      .eq("stream", "topic_research")
+      .order("created_at", { ascending: false }),
+    supabaseAdmin
+      .from("research_findings")
+      .select("id, findings, status, week_of, created_at")
+      .eq("app_id", id)
+      .eq("workspace_id", workspaceId)
+      .eq("stream", "problem_discovery")
+      .order("created_at", { ascending: false }),
+    supabaseAdmin
+      .from("research_findings")
+      .select("id, findings, status, week_of, created_at")
+      .eq("app_id", id)
+      .eq("workspace_id", workspaceId)
+      .eq("stream", "competitor_gap")
+      .order("created_at", { ascending: false }),
+    supabaseAdmin
+      .from("content")
+      .select("source_research_finding_id, platform")
+      .eq("app_id", id)
+      .eq("workspace_id", workspaceId)
+      .not("source_research_finding_id", "is", null),
   ]);
 
   if (!app) {
     notFound();
   }
-
-  const [{ data: topicRows }, { data: problemRows }, { data: competitorRows }, { data: draftRows }] =
-    await Promise.all([
-      supabaseAdmin
-        .from("research_findings")
-        .select("id, findings, status, week_of, created_at")
-        .eq("app_id", id)
-        .eq("workspace_id", workspaceId)
-        .eq("stream", "topic_research")
-        .order("created_at", { ascending: false }),
-      supabaseAdmin
-        .from("research_findings")
-        .select("id, findings, status, week_of, created_at")
-        .eq("app_id", id)
-        .eq("workspace_id", workspaceId)
-        .eq("stream", "problem_discovery")
-        .order("created_at", { ascending: false }),
-      supabaseAdmin
-        .from("research_findings")
-        .select("id, findings, status, week_of, created_at")
-        .eq("app_id", id)
-        .eq("workspace_id", workspaceId)
-        .eq("stream", "competitor_gap")
-        .order("created_at", { ascending: false }),
-      supabaseAdmin
-        .from("content")
-        .select("source_research_finding_id, platform")
-        .eq("app_id", id)
-        .eq("workspace_id", workspaceId)
-        .not("source_research_finding_id", "is", null),
-    ]);
 
   const topics = getLatestWeekRows((topicRows ?? []) as FindingRow[]);
   const problems = (problemRows ?? []) as FindingRow[];

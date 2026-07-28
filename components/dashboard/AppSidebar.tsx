@@ -121,7 +121,7 @@ function NavGroupHeader({
       type="button"
       onClick={onToggle}
       aria-expanded={open}
-      className="flex w-full items-center justify-between rounded-md px-2.5 pt-3 pb-1 text-left font-mono text-[10px] font-semibold tracking-wider text-muted-foreground/70 uppercase transition-colors hover:text-muted-foreground"
+      className="flex w-full items-center justify-between rounded-md px-2.5 pt-3 pb-1 text-left font-mono text-xs font-semibold tracking-wider text-muted-foreground/70 uppercase transition-colors hover:text-muted-foreground"
     >
       {label}
       <ChevronDown className={cn("h-3 w-3 transition-transform", !open && "-rotate-90")} />

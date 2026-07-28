@@ -7,9 +7,10 @@ import { ErrorMessages } from "@/lib/errors/messages";
 import { createAnthropicClient } from "@/lib/anthropic-client";
 import { createFirecrawlClient, SCRAPE_TIMEOUT_MS } from "@/lib/firecrawl-client";
 import { hasAnyConversionRetentionData, parseConversionRetention } from "@/lib/app-settings";
+import { MODELS } from "@/lib/ai/models";
 import type { AppDna } from "@/types";
 
-const CLAUDE_MODEL = "claude-sonnet-5";
+const CLAUDE_MODEL: string = MODELS.STANDARD;
 const MAX_SIGNUP_PAGES_TO_SCRAPE = 3;
 const MAX_FINDINGS = 8;
 
@@ -250,7 +251,10 @@ export const onboardingAudit = schemaTask({
         anthropic.messages.create({
           model: CLAUDE_MODEL,
           max_tokens: 4096,
-          system: SYSTEM_PROMPT,
+          // SYSTEM_PROMPT is fully static — caching it means a batch scan
+          // across many apps only pays the full prompt cost once per
+          // ~5min window, not once per app.
+          system: [{ type: "text", text: SYSTEM_PROMPT, cache_control: { type: "ephemeral" } }],
           messages: [{ role: "user", content: userMessage }],
         })
       );

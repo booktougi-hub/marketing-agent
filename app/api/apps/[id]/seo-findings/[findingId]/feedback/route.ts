@@ -17,13 +17,14 @@ const postSchema = z.object({
   note: z.string().trim().min(1, ErrorMessages.seoAudit.FEEDBACK_EMPTY).max(2000),
 });
 
-// AuditFindingCard's "Tell us more" action. SEO checks are rule-based, not
-// LLM-judged (see SCORING.md), so unlike the onboarding/churn/cro/pricing
-// audits this note doesn't yet feed back into how the next run scores
-// anything — it's still captured into apps.additional_context for
-// consistency and so it's not silently discarded once GEO's LLM-judged
-// checks (which do read additional_context, like every other LLM job) are
-// added.
+// AuditFindingCard's "Tell us more" action, shared by both the SEO and GEO
+// panels (see the sibling route.ts's comment for why this isn't split into
+// a track-filtered copy). SEO checks are rule-based, so a note left on a
+// SEO finding doesn't feed back into how the next run scores anything — but
+// GEO's checks ARE LLM-judged and read apps.additional_context on every run
+// (see trigger/seo-geo-audit.ts), so a note left on a GEO finding actually
+// does inform the next audit. Captured the same way for both tracks either
+// way, for consistency and so it's never silently discarded.
 export const POST = withErrorHandling(async (
   request: NextRequest,
   { params }: { params: Promise<{ id: string; findingId: string }> }
@@ -78,11 +79,10 @@ export const POST = withErrorHandling(async (
   const [{ data: finding }, { data: app }] = await Promise.all([
     supabaseAdmin
       .from("seo_geo_findings")
-      .select("id, title")
+      .select("id, title, track")
       .eq("id", findingId)
       .eq("app_id", id)
       .eq("workspace_id", workspaceId)
-      .eq("track", "seo")
       .single(),
     supabaseAdmin
       .from("apps")
@@ -100,7 +100,8 @@ export const POST = withErrorHandling(async (
   }
 
   const dateLabel = new Date().toISOString().slice(0, 10);
-  const feedbackBlock = `[SEO audit feedback, ${dateLabel}, on "${finding.title.slice(0, 80)}"]: ${parsed.data.note}`;
+  const trackLabel = finding.track === "geo" ? "GEO" : "SEO";
+  const feedbackBlock = `[${trackLabel} audit feedback, ${dateLabel}, on "${finding.title.slice(0, 80)}"]: ${parsed.data.note}`;
   const newAdditionalContext = app.additional_context
     ? `${app.additional_context}\n\n${feedbackBlock}`
     : feedbackBlock;

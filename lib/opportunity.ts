@@ -1,8 +1,9 @@
-// The `research_findings.findings` column is untyped jsonb (SCHEMA.md
-// doesn't pin down a shape for the 'forum_opportunities' stream because
-// that research pipeline hasn't been built yet — see PHASES.md V3 scope).
-// This is the shape the UI expects once it exists; every field is parsed
-// defensively since today the table is simply empty.
+// The `research_findings.findings` column is untyped jsonb, so this file is
+// the closest thing to a schema for the 'forum_opportunities' stream —
+// trigger/forum-opportunity-finder.ts is the real, built pipeline that
+// writes it (see that file for the LLM output shape this parses). Every
+// field is still parsed defensively rather than trusted, same as any other
+// LLM-produced jsonb blob in this codebase.
 
 export type OpportunityPlatform = "reddit" | "hackernews" | "quora" | "linkedin" | "x";
 

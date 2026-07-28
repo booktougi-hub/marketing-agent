@@ -12,6 +12,10 @@ import { UnauthorizedError, ForbiddenError, NotFoundError, ValidationError, Inte
 // characters of Markdown — headers, tables, links included.
 const patchSchema = z.object({
   body: z.string().trim().min(1, "Post body can't be empty.").max(20000),
+  // Optional — only sent when the caller is rescheduling a planned post's
+  // date/time (see PlannedPostCard's date/time picker). Draft edits never
+  // include this.
+  scheduled_at: z.string().datetime().optional(),
 });
 
 async function resolveWorkspaceId(cookieStore: Awaited<ReturnType<typeof cookies>>) {
@@ -87,9 +91,19 @@ export const PATCH = withErrorHandling(async (
       throw new ValidationError(ErrorMessages.content.INVALID_STATE_EDIT, "INVALID_STATE");
     }
 
+    // Rescheduling only makes sense for a post that's already scheduled —
+    // a draft is promoted to "scheduled" through its own flow, not by
+    // slipping a scheduled_at onto this generic edit route.
+    if (parsed.data.scheduled_at && existing.status !== "scheduled") {
+      throw new ValidationError(ErrorMessages.content.INVALID_STATE_EDIT, "INVALID_STATE");
+    }
+
     const { data: updated, error: updateError } = await supabaseAdmin
       .from("content")
-      .update({ body: parsed.data.body })
+      .update({
+        body: parsed.data.body,
+        ...(parsed.data.scheduled_at ? { scheduled_at: parsed.data.scheduled_at } : {}),
+      })
       .eq("id", contentId)
       .eq("app_id", id)
       .eq("workspace_id", workspaceId)

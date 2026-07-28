@@ -6,9 +6,10 @@ import { callExternalService, ExternalServiceError } from "@/lib/errors/AppError
 import { ErrorMessages } from "@/lib/errors/messages";
 import { createAnthropicClient } from "@/lib/anthropic-client";
 import { createFirecrawlClient, SCRAPE_TIMEOUT_MS } from "@/lib/firecrawl-client";
+import { MODELS } from "@/lib/ai/models";
 import type { BrandExtractionSource } from "@/types";
 
-const CLAUDE_MODEL = "claude-sonnet-5";
+const CLAUDE_MODEL: string = MODELS.STANDARD;
 const MAX_ABOUT_PAGES_TO_SCRAPE = 1;
 const MAX_PRICING_PAGES_TO_SCRAPE = 2;
 

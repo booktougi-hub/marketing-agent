@@ -6,9 +6,14 @@ import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { AgentActionEmptyState } from "@/components/apps/agent-action-empty-state";
+import { DemoDataBanner } from "@/components/apps/demo-data-banner";
 import { cn } from "@/lib/utils";
 import { formatTimeAgo } from "@/lib/time";
 import { getNextResearchOccurrence } from "@/lib/schedule";
+// TODO(cleanup-before-prod): remove this import along with the
+// lib/dummy-data/opportunities-demo.ts file and the demo-preview block
+// below once this is ready to ship — see that file's header comment.
+import { DEMO_OPPORTUNITY_FINDINGS } from "@/lib/dummy-data/opportunities-demo";
 import {
   OPPORTUNITY_PLATFORM_COLOR_VAR,
   OPPORTUNITY_PLATFORM_LABEL,
@@ -275,6 +280,14 @@ export function AppOpportunitiesView({
   const [dismissingId, setDismissingId] = useState<string | null>(null);
   const [rowErrors, setRowErrors] = useState<Record<string, string>>({});
 
+  // TODO(cleanup-before-prod): remove this state + handleDemoDismiss + the
+  // demo-preview render block below, along with
+  // lib/dummy-data/opportunities-demo.ts — see that file's header comment.
+  const [demoFindings, setDemoFindings] = useState(DEMO_OPPORTUNITY_FINDINGS);
+  function handleDemoDismiss(id: string) {
+    setDemoFindings((prev) => prev.filter((f) => f.id !== id));
+  }
+
   function toggleFromSet(setter: typeof setExpandedExcerpts, id: string) {
     setter((prev) => {
       const next = new Set(prev);
@@ -399,16 +412,44 @@ export function AppOpportunitiesView({
       </div>
 
       {findings.length === 0 ? (
-        <AgentActionEmptyState
-          appId={appId}
-          actionType="forum_opportunity_scan"
-          planTier={planTier}
-          agentCreditsUsedThisWeek={agentCreditsUsedThisWeek}
-          agentCreditsResetAt={agentCreditsResetAt}
-          lastAgentActionAt={lastAgentActionAt}
-          firstRun={{ completed: firstResearchCompleted, completedAt: firstResearchCompletedAt }}
-          nextRunAt={getNextResearchOccurrence(preferredResearchDay, preferredResearchHour)}
-        />
+        <div className="flex flex-col gap-4">
+          {/* TODO(cleanup-before-prod): remove this DemoDataBanner +
+              demoFindings-mapped grid, keeping only the AgentActionEmptyState
+              below — see lib/dummy-data/opportunities-demo.ts's header
+              comment. */}
+          {demoFindings.length > 0 && (
+            <>
+              <DemoDataBanner message="No opportunity scan has run for this app yet — showing example cards so you can see what real threads and drafted replies will look like." />
+              <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+                {demoFindings.map((finding) => (
+                  <OpportunityCard
+                    key={finding.id}
+                    finding={finding}
+                    excerptExpanded={expandedExcerpts.has(finding.id)}
+                    replyExpanded={expandedReplies.has(finding.id)}
+                    copied={copiedId === finding.id}
+                    dismissing={false}
+                    onToggleExcerpt={() => toggleFromSet(setExpandedExcerpts, finding.id)}
+                    onToggleReply={() => toggleFromSet(setExpandedReplies, finding.id)}
+                    onCopyReply={(text) => handleCopyReply(finding.id, text)}
+                    onDismiss={() => handleDemoDismiss(finding.id)}
+                  />
+                ))}
+              </div>
+            </>
+          )}
+
+          <AgentActionEmptyState
+            appId={appId}
+            actionType="forum_opportunity_scan"
+            planTier={planTier}
+            agentCreditsUsedThisWeek={agentCreditsUsedThisWeek}
+            agentCreditsResetAt={agentCreditsResetAt}
+            lastAgentActionAt={lastAgentActionAt}
+            firstRun={{ completed: firstResearchCompleted, completedAt: firstResearchCompletedAt }}
+            nextRunAt={getNextResearchOccurrence(preferredResearchDay, preferredResearchHour)}
+          />
+        </div>
       ) : visible.length === 0 ? (
         <EmptyState message="No opportunities match these filters." />
       ) : (

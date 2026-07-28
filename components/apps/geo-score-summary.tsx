@@ -7,8 +7,8 @@ import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
 import { formatTimeAgo } from "@/lib/time";
 import { getScoreBand, SCORE_BAND_LABEL, type ScoreBand } from "@/lib/seo/checkRegistry";
-import { DEMO_GEO_CHECK_LIST, type GeoDimScores } from "@/lib/demoData/geoDemoData";
-import type { SeoGeoCheckResultMap } from "@/types";
+import { ALL_GEO_CHECKS } from "@/lib/geo/checkRegistry";
+import type { GeoDimScores, SeoGeoCheckResultMap } from "@/types";
 
 const BAND_COLOR_VAR: Record<ScoreBand, string> = {
   strong: "var(--chart-2)",
@@ -80,7 +80,7 @@ export function GeoScoreSummary({
 
         {showAll && (
           <div className="flex flex-col gap-1">
-            {DEMO_GEO_CHECK_LIST.map((check) => {
+            {ALL_GEO_CHECKS.map((check) => {
               const result = checkResults[check.id];
               const Icon = !result || !result.measurable ? MinusCircle : result.pass ? CheckCircle2 : XCircle;
               const color = !result || !result.measurable

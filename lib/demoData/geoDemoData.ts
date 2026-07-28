@@ -1,14 +1,10 @@
-// Illustrative-only GEO score + findings — GEO scoring itself isn't built
-// yet (see PHASES.md Notes Log), so this is purely a UI/data-shape preview
-// of what SCORING.md's GEO track will eventually produce, always shown next
-// to a DemoDataBanner. Never written to any table.
-import type { SeoGeoCheckResultMap, SeoGeoFinding } from "@/types";
-
-export interface GeoDimScores {
-  content_quality: number;
-  structure: number;
-  freshness: number;
-}
+// Illustrative-only GEO score + findings — shown on the GEO panel
+// (components/apps/app-geo-view.tsx) only as a fallback when no real
+// trigger/seo-geo-audit.ts run has completed for this app yet, always next
+// to a DemoDataBanner so it's never mistaken for a real result. Same
+// pattern as lib/demoData/seoDemoData.ts. Never written to
+// seo_geo_scores/seo_geo_findings — purely an in-code constant.
+import type { GeoDimScores, SeoGeoCheckResultMap, SeoGeoFinding } from "@/types";
 
 export const DEMO_GEO_SCORE = 47;
 
@@ -19,22 +15,6 @@ export const DEMO_GEO_DIM_SCORES: GeoDimScores = {
 };
 
 export const DEMO_GEO_RUN_AT = new Date(Date.now() - 5 * 24 * 60 * 60 * 1000).toISOString();
-
-// Presentation-only list for the "show all checks" breakdown — not a real
-// check registry the way lib/seo/checkRegistry.ts is, since no GEO
-// evaluator exists to actually run these yet.
-export const DEMO_GEO_CHECK_LIST: { id: string; description: string }[] = [
-  { id: "geo.content.answer_first", description: "Direct answer in first 1-2 sentences" },
-  { id: "geo.content.entity_clear", description: "\"X is a [category] that [does Y]\" stated early" },
-  { id: "geo.content.statistics", description: "≥1 specific verifiable statistic per major claim" },
-  { id: "geo.content.citations", description: "≥1 external credible source cited" },
-  { id: "geo.content.quotation", description: "≥1 quote-style attribution" },
-  { id: "geo.structure.standalone_chunks", description: "Each H2 section readable standalone" },
-  { id: "geo.structure.faq_present", description: "Explicit FAQ section with Q&A format" },
-  { id: "geo.structure.fluency", description: "Passes a readability/fluency check" },
-  { id: "geo.structure.thin_vs_competitors", description: "Word count ≥50% of top-cited competitor pages" },
-  { id: "geo.freshness.published_within_1yr", description: "Published or updated within 12 months" },
-];
 
 export const DEMO_GEO_CHECK_RESULTS: SeoGeoCheckResultMap = {
   "geo.content.answer_first": { pass: false, value: {}, confidence: 0.85, measurable: true },

@@ -15,9 +15,10 @@ import {
   buildDiscoveryQueries,
   type DiscoveryQuery,
 } from "@/lib/discovery-query-builder";
+import { MODELS } from "@/lib/ai/models";
 import type { AppDna, AppStoreUrls, ProductType } from "@/types";
 
-const CLAUDE_MODEL = "claude-sonnet-5";
+const CLAUDE_MODEL: string = MODELS.SYNTHESIS;
 const MAX_COMPETITORS = 5;
 // Safety valve on Step 2 cost — Step 1 can now surface far more than 5
 // candidates (4 discovery sources vs. the old single web search), and every
@@ -139,7 +140,8 @@ async function discoverViaWebSearch(
     anthropic.messages.create({
       model: CLAUDE_MODEL,
       max_tokens: 512,
-      system: CANDIDATE_EXTRACTION_PROMPT,
+      // Static prompt, reused across every discovery query — cache it.
+      system: [{ type: "text", text: CANDIDATE_EXTRACTION_PROMPT, cache_control: { type: "ephemeral" } }],
       messages: [
         {
           role: "user",
@@ -302,7 +304,9 @@ async function discoverViaSimilarApps(
         anthropic.messages.create({
           model: CLAUDE_MODEL,
           max_tokens: 512,
-          system: SIMILAR_APPS_EXTRACTION_PROMPT,
+          // Static prompt, called once per seed listing (parallel
+          // Promise.all across seeds) — cache it.
+          system: [{ type: "text", text: SIMILAR_APPS_EXTRACTION_PROMPT, cache_control: { type: "ephemeral" } }],
           messages: [{ role: "user", content: `=== LISTING PAGE: ${seed.name} ===\n${markdown.slice(0, 6000)}` }],
         })
       );
@@ -517,7 +521,10 @@ async function verifyCandidate(
     anthropic.messages.create({
       model: CLAUDE_MODEL,
       max_tokens: 250,
-      system: VERIFICATION_SYSTEM_PROMPT,
+      // Static prompt, called up to MAX_CANDIDATES_TO_VERIFY times per app
+      // — the highest within-run repetition of any call in this file, so
+      // this is the most valuable of the three breakpoints here.
+      system: [{ type: "text", text: VERIFICATION_SYSTEM_PROMPT, cache_control: { type: "ephemeral" } }],
       messages: [
         {
           role: "user",

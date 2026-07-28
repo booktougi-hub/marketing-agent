@@ -1,9 +1,8 @@
-import { cookies } from "next/headers";
 import { notFound, redirect } from "next/navigation";
-import { createServerClient } from "@supabase/auth-helpers-nextjs";
 import { AppContentGate } from "@/components/apps/app-content-gate";
 import type { ContentWithAnalytics } from "@/components/apps/app-content-view";
 import { supabaseAdmin } from "@/lib/supabase-server";
+import { getWorkspaceContext } from "@/lib/workspace-context";
 import { timed } from "@/lib/perf-log";
 import type { AppDna, AppStatus, DiagnosisData, StrategyContentPillar, StrategyPersona } from "@/types";
 
@@ -24,51 +23,43 @@ export default async function AppContentPage({
 }) {
   const { id } = await params;
 
-  const cookieStore = await cookies();
-  const supabase = createServerClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-    {
-      cookies: {
-        getAll() {
-          return cookieStore.getAll();
-        },
-        setAll() {
-          // Server Components can't set cookies; middleware handles refresh.
-        },
-      },
-    }
-  );
-
-  const {
-    data: { user },
-  } = await timed("content/page:getUser", () => supabase.auth.getUser());
-
-  if (!user) {
+  const context = await getWorkspaceContext();
+  if (!context) {
     redirect("/auth/login");
   }
 
-  const { data: membership } = await timed("content/page:workspace_members", () =>
-    supabaseAdmin
-      .from("workspace_members")
-      .select("workspace_id")
-      .eq("user_id", user.id)
-      .single()
-  );
-
-  const workspaceId = membership?.workspace_id as string | undefined;
+  const { workspaceId } = context;
 
   if (!workspaceId) {
     notFound();
   }
 
-  const { data: app } = await timed("content/page:app_row", () =>
-    supabaseAdmin
-      .from("apps")
-      .select("id, name, source_url, status, dna, error_message, diagnosis")
-      .eq("id", id)
-      .eq("workspace_id", workspaceId)
-      .single()
+  // The content+analytics batch below only needs `id`/`workspaceId` — it
+  // doesn't depend on the app row at all, so it's merged into the same
+  // Promise.all instead of being awaited after it.
+  const [{ data: app }, { data: contentRows }, { data: analyticsRows }] = await timed(
+    "content/page:app+content+analytics",
+    () =>
+      Promise.all([
+        supabaseAdmin
+          .from("apps")
+          .select("id, name, source_url, status, dna, error_message, diagnosis")
+          .eq("id", id)
+          .eq("workspace_id", workspaceId)
+          .single(),
+        supabaseAdmin
+          .from("content")
+          .select("*")
+          .eq("app_id", id)
+          .eq("workspace_id", workspaceId)
+          .in("status", ["draft", "scheduled", "published"]),
+        supabaseAdmin
+          .from("analytics")
+          .select("content_id, impressions, clicks, likes, fetched_at")
+          .eq("app_id", id)
+          .eq("workspace_id", workspaceId)
+          .order("fetched_at", { ascending: false }),
+      ])
   );
 
   if (!app) {
@@ -99,25 +90,6 @@ export default async function AppContentPage({
     );
     draftStrategy = data;
   }
-
-  const [{ data: contentRows }, { data: analyticsRows }] = await timed(
-    "content/page:content+analytics",
-    () =>
-      Promise.all([
-        supabaseAdmin
-          .from("content")
-          .select("*")
-          .eq("app_id", id)
-          .eq("workspace_id", workspaceId)
-          .in("status", ["draft", "scheduled", "published"]),
-        supabaseAdmin
-          .from("analytics")
-          .select("content_id, impressions, clicks, likes, fetched_at")
-          .eq("app_id", id)
-          .eq("workspace_id", workspaceId)
-          .order("fetched_at", { ascending: false }),
-      ])
-  );
 
   const analyticsByContentId = new Map<
     string,

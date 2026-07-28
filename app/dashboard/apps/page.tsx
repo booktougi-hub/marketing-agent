@@ -1,13 +1,12 @@
-import { cookies } from "next/headers";
 import Link from "next/link";
 import { redirect } from "next/navigation";
-import { createServerClient } from "@supabase/auth-helpers-nextjs";
 import { Plus } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { buttonVariants } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { AppIcon } from "@/components/apps/app-icon";
 import { supabaseAdmin } from "@/lib/supabase-server";
+import { getWorkspaceContext } from "@/lib/workspace-context";
 import type { App, AppStatus } from "@/types";
 
 const STATUS_LABELS: Record<AppStatus, string> = {
@@ -25,37 +24,12 @@ const STATUS_LABELS: Record<AppStatus, string> = {
 };
 
 export default async function AppsPage() {
-  const cookieStore = await cookies();
-  const supabase = createServerClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-    {
-      cookies: {
-        getAll() {
-          return cookieStore.getAll();
-        },
-        setAll() {
-          // Server Components can't set cookies; middleware handles refresh.
-        },
-      },
-    }
-  );
-
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-
-  if (!user) {
+  const context = await getWorkspaceContext();
+  if (!context) {
     redirect("/auth/login");
   }
 
-  const { data: membership } = await supabaseAdmin
-    .from("workspace_members")
-    .select("workspace_id")
-    .eq("user_id", user.id)
-    .single();
-
-  const workspaceId = membership?.workspace_id as string | undefined;
+  const { workspaceId } = context;
 
   let apps: App[] = [];
   if (workspaceId) {

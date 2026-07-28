@@ -7,9 +7,10 @@ import { ErrorMessages } from "@/lib/errors/messages";
 import { createAnthropicClient } from "@/lib/anthropic-client";
 import { searchApolloPeople, enrichApolloPeople, type ApolloPerson } from "@/lib/apollo-client";
 import { verifyEmail, findEmail } from "@/lib/hunter-client";
+import { MODELS } from "@/lib/ai/models";
 import type { AppDna, ApolloFilters } from "@/types";
 
-const CLAUDE_MODEL = "claude-sonnet-5";
+const CLAUDE_MODEL: string = MODELS.STANDARD;
 const PREVIEW_COUNT = 5;
 // Apollo's People Search is free, so a bigger raw pool costs nothing — but
 // enrichment (the only call that reveals email/trigger-event data) consumes

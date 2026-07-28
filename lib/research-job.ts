@@ -5,6 +5,7 @@ import { searchWeb, type SearchResultDoc } from "@/lib/firecrawl-search";
 import { callExternalService, ExternalServiceError } from "@/lib/errors/AppError";
 import { ErrorMessages } from "@/lib/errors/messages";
 import { createAnthropicClient } from "@/lib/anthropic-client";
+import { MODELS } from "@/lib/ai/models";
 import type { AppDna } from "@/types";
 
 // Shared orchestration for the four research jobs (topic-research,
@@ -14,7 +15,11 @@ import type { AppDna } from "@/types";
 // per item. Each job only supplies what's actually different: its queries,
 // its system prompt, and its item schema.
 
-const CLAUDE_MODEL = "claude-sonnet-5";
+// This is the highest-call-volume LLM path in the system — one call per
+// candidate thread/topic/page across four jobs — and every one of those
+// calls is a relevance judgment or extraction, not synthesis, which is
+// exactly BULK_CLASSIFICATION's intended shape (see lib/ai/models.ts).
+const CLAUDE_MODEL: string = MODELS.BULK_CLASSIFICATION;
 
 export function getMondayOfCurrentWeek(): string {
   const now = new Date();

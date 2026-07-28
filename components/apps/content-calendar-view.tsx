@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { ChevronLeft, ChevronRight } from "lucide-react";
+import { CalendarDays, ChevronLeft, ChevronRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
@@ -41,6 +41,10 @@ interface PlannedEditProps {
   editingId: string | null;
   editingBody: string;
   onEditingBodyChange: (value: string) => void;
+  editingDate: string;
+  editingTime: string;
+  onEditingDateChange: (value: string) => void;
+  onEditingTimeChange: (value: string) => void;
   savingId: string | null;
   rowErrors: Record<string, string>;
   onStartEdit: (item: ContentWithAnalytics) => void;
@@ -211,18 +215,29 @@ export function ContentCalendarView({
           if (!open) setSelectedDay(null);
         }}
       >
-        <DialogContent className="max-h-[80vh] overflow-y-auto sm:max-w-lg">
-          <DialogHeader>
-            <DialogTitle>
-              {selectedDay?.toLocaleDateString("en-US", {
-                weekday: "long",
-                month: "long",
-                day: "numeric",
-                year: "numeric",
-              })}
-            </DialogTitle>
+        {/* Sharper corners than the default dialog (rounded-xl) — matches
+            the rounded-lg cards it holds instead of introducing a rounder,
+            more-rounded frame around them. */}
+        <DialogContent className="max-h-[80vh] max-w-full gap-0 overflow-y-auto rounded-lg p-0 sm:max-w-lg">
+          <DialogHeader className="flex-row items-center gap-2.5 border-b p-4 pr-10">
+            <span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
+              <CalendarDays className="size-4" />
+            </span>
+            <div className="min-w-0 flex-1">
+              <DialogTitle>
+                {selectedDay?.toLocaleDateString("en-US", {
+                  weekday: "long",
+                  month: "long",
+                  day: "numeric",
+                  year: "numeric",
+                })}
+              </DialogTitle>
+              <p className="text-xs text-muted-foreground">
+                {selectedItems.length} {selectedItems.length === 1 ? "post" : "posts"}
+              </p>
+            </div>
           </DialogHeader>
-          <div className="flex flex-col gap-3">
+          <div className="flex flex-col gap-3 p-4">
             {selectedItems.map((item) =>
               editProps ? (
                 <PlannedPostCard
@@ -232,6 +247,10 @@ export function ContentCalendarView({
                   isEditing={editProps.editingId === item.id}
                   editingBody={editProps.editingBody}
                   onEditingBodyChange={editProps.onEditingBodyChange}
+                  editingDate={editProps.editingDate}
+                  editingTime={editProps.editingTime}
+                  onEditingDateChange={editProps.onEditingDateChange}
+                  onEditingTimeChange={editProps.onEditingTimeChange}
                   saving={editProps.savingId === item.id}
                   error={editProps.rowErrors[item.id] ?? null}
                   onStartEdit={() => editProps.onStartEdit(item)}

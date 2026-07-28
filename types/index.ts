@@ -96,6 +96,7 @@ export interface App {
   product_type: ProductType;
   dna: AppDna | null;
   icon_url: string | null;
+  screenshot_url: string | null;
   status: AppStatus;
   is_paused: boolean;
   error_message: string | null;
@@ -570,9 +571,7 @@ export interface PricingFinding {
 // ---------------------------------------------------------------------------
 // seo_geo_scores / seo_geo_findings — SEO & GEO scoring engine (see
 // SCORING.md). Two independent evaluation tracks, never blended into one
-// score. Only the SEO track is built/populated so far — the GEO track's
-// shape is included since both tracks share one schema, but no GEO rows are
-// written yet.
+// score. Both tracks are built and populated by trigger/seo-geo-audit.ts.
 // ---------------------------------------------------------------------------
 
 export type SeoGeoTrack = "seo" | "geo";
@@ -583,6 +582,12 @@ export type GeoDimension = "content_quality" | "structure" | "freshness";
 export interface SeoDimScores {
   retrievability: number;
   off_page: number;
+}
+
+export interface GeoDimScores {
+  content_quality: number;
+  structure: number;
+  freshness: number;
 }
 
 export type EvidenceTier = 1 | 2 | 3;
@@ -605,7 +610,7 @@ export interface SeoGeoScore {
   content_id: string | null;
   track: SeoGeoTrack;
   score: number;
-  dim_scores: SeoDimScores | Record<string, number>;
+  dim_scores: SeoDimScores | GeoDimScores;
   check_results: SeoGeoCheckResultMap;
   run_at: string;
 }
@@ -760,4 +765,19 @@ export interface ChatMessage {
   content: string;
   confirmAction?: ChatConfirmAction;
   createdAt: string;
+}
+
+// chat_declines — one row per turn the coordinator declined as out of scope
+// (see DECLINE_MARKER in lib/chat/system-prompt.ts for how app/api/chat/
+// route.ts detects this without a second classification call). Write-only
+// from the app's side for now; no UI reads this table yet — it exists so
+// the scope boundary in SCOPED_SYSTEM_PROMPT can be tuned later from real
+// usage instead of guessed upfront.
+export interface ChatDecline {
+  id: string;
+  conversation_id: string;
+  app_id: string;
+  workspace_id: string;
+  user_message: string;
+  created_at: string;
 }

@@ -41,6 +41,7 @@ export function AppIdentitySection({
   appId,
   initialName,
   sourceUrl,
+  screenshotUrl,
   initialProductType,
   initialAdditionalContext,
   urlChangedAt,
@@ -51,6 +52,7 @@ export function AppIdentitySection({
   appId: string;
   initialName: string | null;
   sourceUrl: string;
+  screenshotUrl: string | null;
   initialProductType: ProductType;
   initialAdditionalContext: string | null;
   urlChangedAt: string | null;
@@ -167,65 +169,113 @@ export function AppIdentitySection({
         </CardDescription>
       </CardHeader>
       <CardContent className="flex flex-col gap-6">
-        <div className="flex flex-col gap-1.5">
-          <Label htmlFor="app-name">App Name</Label>
-          <Input id="app-name" value={name} onChange={(e) => setName(e.target.value)} />
-        </div>
-
-        <div className="flex flex-col gap-1.5">
-          <Label>App URL</Label>
-          <div className="flex items-center gap-2 text-sm">
-            <Lock className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-            <span className="truncate">{currentUrl}</span>
+        <div className="flex flex-col gap-6 lg:flex-row lg:items-start">
+          {/* Live preview — screenshot_url comes from trigger/dna-extraction.ts,
+              piggybacking on the same Firecrawl scrape that already resolves
+              icon_url, so it refreshes on initial onboarding and again on
+              every "Re-analyse App" below, not on a fixed schedule. */}
+          <div className="flex w-full flex-col gap-2 lg:w-72 lg:shrink-0">
+            {/* DESIGN.md's "Level 2" elevated-surface treatment
+                (bg-muted resolves to #1c1c1c in dark mode, one step
+                lighter than this Card's own #171717) plus the standard
+                hairline border — full-opacity bg-muted, not a faded
+                tint, so the box reads as a clearly bordered grey tile
+                against the card behind it. */}
+            <div className="w-full overflow-hidden rounded-lg border bg-muted">
+              {screenshotUrl ? (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img
+                  src={screenshotUrl}
+                  alt={`${currentUrl} preview`}
+                  className="aspect-[16/9] w-full object-cover object-top"
+                />
+              ) : (
+                <div className="flex aspect-[16/9] w-full flex-col items-center justify-center gap-1 px-4 text-center text-xs text-muted-foreground">
+                  <span>No preview yet</span>
+                  <span>Captured on the next analysis</span>
+                </div>
+              )}
+            </div>
+            <div className="flex items-center gap-1.5 text-xs font-medium tracking-wide text-muted-foreground uppercase">
+              <span className="relative flex size-2 shrink-0">
+                <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-500 opacity-75" />
+                <span className="relative inline-flex size-2 rounded-full bg-emerald-500" />
+              </span>
+              Live Preview
+            </div>
           </div>
-          <p className="text-xs text-muted-foreground">URL is locked after creation</p>
-          {currentUrlChangedAt === null && (
-            <button
-              type="button"
-              onClick={() => {
-                setNewUrlInput(currentUrl);
-                setUrlError(null);
-                setUrlModalOpen(true);
-              }}
-              className="w-fit text-xs font-medium text-primary hover:underline"
-            >
-              Change URL (one time only)
-            </button>
-          )}
-        </div>
 
-        <div className="flex flex-col gap-1.5">
-          <Label htmlFor="product-type">Product Type</Label>
-          <Select
-            items={PRODUCT_TYPE_OPTIONS}
-            value={productType}
-            onValueChange={(value) => setProductType(value as ProductType)}
-          >
-            <SelectTrigger id="product-type" className="w-full">
-              <SelectValue placeholder="Select a type" />
-            </SelectTrigger>
-            <SelectContent>
-              {PRODUCT_TYPE_OPTIONS.map((option) => (
-                <SelectItem key={option.value} value={option.value}>
-                  {option.label}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </div>
+          <div className="flex flex-1 flex-col gap-4">
+            <div className="flex flex-col gap-1.5">
+              <Label htmlFor="app-name" className="text-xs font-medium tracking-wide text-muted-foreground uppercase">
+                App Name
+              </Label>
+              <Input id="app-name" value={name} onChange={(e) => setName(e.target.value)} />
+            </div>
 
-        <div className="flex flex-col gap-1.5">
-          <Label htmlFor="additional-context">Additional context about your app</Label>
-          <Textarea
-            id="additional-context"
-            rows={6}
-            value={additionalContext}
-            onChange={(e) => setAdditionalContext(e.target.value)}
-          />
-          <p className="text-xs text-muted-foreground">
-            This is used to improve your marketing strategy. Updates here are free
-            and take effect on the next content cycle.
-          </p>
+            <div className="flex flex-col gap-1.5">
+              <div className="flex items-center justify-between gap-2">
+                <Label className="text-xs font-medium tracking-wide text-muted-foreground uppercase">
+                  App URL
+                </Label>
+                {currentUrlChangedAt === null && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setNewUrlInput(currentUrl);
+                      setUrlError(null);
+                      setUrlModalOpen(true);
+                    }}
+                    className="text-xs font-medium text-muted-foreground hover:text-foreground hover:underline"
+                  >
+                    Change URL (one time only)
+                  </button>
+                )}
+              </div>
+              <div className="flex h-8 items-center gap-2 rounded-lg border border-input bg-transparent px-2.5 text-sm">
+                <Lock className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                <span className="truncate">{currentUrl}</span>
+              </div>
+            </div>
+
+            <div className="flex flex-col gap-1.5">
+              <Label htmlFor="product-type" className="text-xs font-medium tracking-wide text-muted-foreground uppercase">
+                Product Type
+              </Label>
+              <Select
+                items={PRODUCT_TYPE_OPTIONS}
+                value={productType}
+                onValueChange={(value) => setProductType(value as ProductType)}
+              >
+                <SelectTrigger id="product-type" className="w-full">
+                  <SelectValue placeholder="Select a type" />
+                </SelectTrigger>
+                <SelectContent>
+                  {PRODUCT_TYPE_OPTIONS.map((option) => (
+                    <SelectItem key={option.value} value={option.value}>
+                      {option.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="flex flex-col gap-1.5">
+              <Label htmlFor="additional-context" className="text-xs font-medium tracking-wide text-muted-foreground uppercase">
+                Additional Context
+              </Label>
+              <Textarea
+                id="additional-context"
+                rows={6}
+                value={additionalContext}
+                onChange={(e) => setAdditionalContext(e.target.value)}
+              />
+              <p className="text-xs text-muted-foreground">
+                This is used to improve your marketing strategy. Updates here are free
+                and take effect on the next content cycle.
+              </p>
+            </div>
+          </div>
         </div>
 
         {saveError && <ErrorMessage message={saveError} />}

@@ -8,9 +8,13 @@ import { handleJobError } from "@/lib/errors/jobErrorHandler";
 import { callExternalService, ExternalServiceError } from "@/lib/errors/AppError";
 import { ErrorMessages } from "@/lib/errors/messages";
 import { diagnosisSchema } from "@/trigger/diagnosis";
+import { MODELS } from "@/lib/ai/models";
 import type { AppDna, CompetitorResearch, DiagnosisData, ProductType } from "@/types";
 
-const CLAUDE_MODEL = "claude-sonnet-5";
+// Narrower in scope than diagnosis.ts itself (a change-detection check, not
+// an original diagnosis) — stays on the SYNTHESIS tier rather than
+// HIGH_STAKES_SYNTHESIS.
+const CLAUDE_MODEL: string = MODELS.SYNTHESIS;
 
 const payloadSchema = z.object({
   app_id: z.string(),
@@ -164,7 +168,10 @@ ${freshHomepageMarkdown ? freshHomepageMarkdown.slice(0, 4000) : "(homepage re-s
           // testing, so this gives real headroom above diagnosis.ts's 1024
           // (which only ever emits one diagnosis, no summary alongside it).
           max_tokens: 2048,
-          system: SYSTEM_PROMPT,
+          // SYSTEM_PROMPT is fully static — caching it means the quarterly
+          // scan across many apps only pays the full prompt cost once per
+          // ~5min window, not once per app.
+          system: [{ type: "text", text: SYSTEM_PROMPT, cache_control: { type: "ephemeral" } }],
           messages: [{ role: "user", content: userMessage }],
         })
       );

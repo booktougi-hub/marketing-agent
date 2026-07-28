@@ -1,8 +1,7 @@
-import { cookies } from "next/headers";
 import { notFound, redirect } from "next/navigation";
-import { createServerClient } from "@supabase/auth-helpers-nextjs";
 import { BrandIdentitySection } from "@/components/apps/brand-identity-section";
 import { supabaseAdmin } from "@/lib/supabase-server";
+import { getWorkspaceContext } from "@/lib/workspace-context";
 import { timed } from "@/lib/perf-log";
 import type { BrandInformation, PlanTier } from "@/types";
 
@@ -13,39 +12,12 @@ export default async function AppBrandInformationPage({
 }) {
   const { id } = await params;
 
-  const cookieStore = await cookies();
-  const supabase = createServerClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-    {
-      cookies: {
-        getAll() {
-          return cookieStore.getAll();
-        },
-        setAll() {
-          // Server Components can't set cookies; middleware handles refresh.
-        },
-      },
-    }
-  );
-
-  const {
-    data: { user },
-  } = await timed("brand-information/page:getUser", () => supabase.auth.getUser());
-
-  if (!user) {
+  const context = await getWorkspaceContext();
+  if (!context) {
     redirect("/auth/login");
   }
 
-  const { data: membership } = await timed("brand-information/page:workspace_members", () =>
-    supabaseAdmin
-      .from("workspace_members")
-      .select("workspace_id")
-      .eq("user_id", user.id)
-      .single()
-  );
-
-  const workspaceId = membership?.workspace_id as string | undefined;
+  const { workspaceId } = context;
 
   if (!workspaceId) {
     notFound();

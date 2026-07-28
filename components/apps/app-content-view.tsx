@@ -18,10 +18,21 @@ import { supabase } from "@/lib/supabase";
 import type { Content, ContentPlatform } from "@/types";
 import { ContentCalendarView } from "@/components/apps/content-calendar-view";
 import {
+  combineDateAndTime,
   DraftPostCard,
   PlannedPostCard,
   PublishedPostCard,
+  toDateInputValue,
+  toTimeInputValue,
 } from "@/components/apps/content-post-card";
+import { PlatformDetailView } from "@/components/apps/platform-detail-view";
+
+// Platforms that show the new My Channel / Top Influencers dummy-data view
+// (components/apps/platform-detail-view.tsx) instead of the real Drafts/
+// Planned/Published list below — these three have no content-generation
+// pipeline yet, so that list is always empty for them anyway. Twitter/
+// LinkedIn/Dev.to keep the real list untouched.
+const PLATFORM_DETAIL_VIEW_PLATFORMS = new Set<ContentPlatform>(["youtube", "instagram", "facebook"]);
 
 export interface ContentWithAnalytics extends Content {
   analytics: { impressions: number; clicks: number; likes: number } | null;
@@ -110,11 +121,37 @@ export function AppContentView({
 
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editingBody, setEditingBody] = useState("");
+  // Only meaningful for a planned (scheduled) post being edited — drafts
+  // have no scheduled_at, so these stay empty strings for a draft edit and
+  // saveEdit skips sending scheduled_at entirely in that case.
+  const [editingDate, setEditingDate] = useState("");
+  const [editingTime, setEditingTime] = useState("");
   const [savingId, setSavingId] = useState<string | null>(null);
   const [rowErrors, setRowErrors] = useState<Record<string, string>>({});
 
   const [deleteTarget, setDeleteTarget] = useState<ContentWithAnalytics | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
+
+  // This component doesn't remount when a sidebar link (e.g. YouTube ->
+  // Instagram) only changes the `platform`/`tab` query string on the same
+  // route — so the useState initializers above only ever run once, on
+  // first mount, and platformFilter/dateTab/subTab would otherwise stay
+  // frozen at whatever they were the first time this page loaded while
+  // the URL itself kept updating. This re-syncs them whenever the URL's
+  // own params change. It intentionally does NOT fire on the in-page
+  // filter-pill/tab clicks below (those call setPlatformFilter/setSubTab
+  // directly without touching the URL), so a manual in-page choice still
+  // isn't stomped on by this effect re-running for unrelated re-renders.
+  useEffect(() => {
+    setPlatformFilter(initialPlatformFilter);
+    setDateTab(initialPlatformFilter === "all" ? "week" : "all");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [platformParam]);
+
+  useEffect(() => {
+    setSubTab(initialSubTab);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tabParam]);
 
   // content-generation runs in the background after approval — this page
   // (and initialContent) can render before that job finishes, so without a
@@ -203,22 +240,35 @@ export function AppContentView({
   function startEdit(item: ContentWithAnalytics) {
     setEditingId(item.id);
     setEditingBody(item.body);
+    if (item.scheduled_at) {
+      setEditingDate(toDateInputValue(item.scheduled_at));
+      setEditingTime(toTimeInputValue(item.scheduled_at));
+    } else {
+      setEditingDate("");
+      setEditingTime("");
+    }
     setRowError(item.id, null);
   }
 
   function cancelEdit() {
     setEditingId(null);
     setEditingBody("");
+    setEditingDate("");
+    setEditingTime("");
   }
 
   async function saveEdit(contentId: string) {
     setSavingId(contentId);
     setRowError(contentId, null);
     try {
+      const scheduledAt = editingDate && editingTime ? combineDateAndTime(editingDate, editingTime) : null;
       const res = await fetch(`/api/apps/${appId}/content/${contentId}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ body: editingBody }),
+        body: JSON.stringify({
+          body: editingBody,
+          ...(scheduledAt ? { scheduled_at: scheduledAt } : {}),
+        }),
       });
       const json = await res.json().catch(() => null);
       if (!res.ok) {
@@ -227,7 +277,9 @@ export function AppContentView({
       }
       setContent((prev) =>
         prev.map((item) =>
-          item.id === contentId ? { ...item, body: editingBody } : item
+          item.id === contentId
+            ? { ...item, body: editingBody, ...(scheduledAt ? { scheduled_at: scheduledAt } : {}) }
+            : item
         )
       );
       setEditingId(null);
@@ -266,6 +318,10 @@ export function AppContentView({
     editingId,
     editingBody,
     onEditingBodyChange: setEditingBody,
+    editingDate,
+    editingTime,
+    onEditingDateChange: setEditingDate,
+    onEditingTimeChange: setEditingTime,
     savingId,
     rowErrors,
     onStartEdit: startEdit,
@@ -273,6 +329,14 @@ export function AppContentView({
     onSave: saveEdit,
     onDelete: (item: ContentWithAnalytics) => setDeleteTarget(item),
   };
+
+  // YouTube/Instagram/Facebook show the new dummy-data My Channel / Top
+  // Influencers view instead of everything below (filter chips, date tabs,
+  // Drafts/Planned/Published, calendar, the delete dialog) — a full swap,
+  // not an additional tab alongside the real content list.
+  if (platformFilter !== "all" && PLATFORM_DETAIL_VIEW_PLATFORMS.has(platformFilter)) {
+    return <PlatformDetailView platform={platformFilter} />;
+  }
 
   return (
     <div className="flex flex-col gap-5">
@@ -439,6 +503,10 @@ export function AppContentView({
                 isEditing={editingId === item.id}
                 editingBody={editingBody}
                 onEditingBodyChange={setEditingBody}
+                editingDate={editingDate}
+                editingTime={editingTime}
+                onEditingDateChange={setEditingDate}
+                onEditingTimeChange={setEditingTime}
                 saving={savingId === item.id}
                 error={rowErrors[item.id] ?? null}
                 onStartEdit={() => startEdit(item)}

@@ -17,11 +17,14 @@ const patchSchema = z.object({
   status: z.enum(["applied", "skipped"]),
 });
 
-// "Mark as Fixed" / "Not Applicable" on the SEO panel — mirrors the
+// "Mark as Fixed" / "Not Applicable" on the SEO and GEO panels — mirrors the
 // onboarding/churn/cro/pricing findings routes, against seo_geo_findings
-// (filtered to track='seo') instead. Statuses use scoring.md's own
-// vocabulary ('applied'/'skipped') rather than the other audits' ('fixed'/
-// 'not_applicable') — components/apps/app-seo-view.tsx translates
+// instead. Not filtered by track: finding ids are globally unique UUIDs, so
+// matching on id + app_id + workspace_id alone is unambiguous, and both
+// components/apps/app-seo-view.tsx and app-geo-view.tsx hit this same route
+// rather than duplicating a near-identical GEO-only copy of it. Statuses use
+// scoring.md's own vocabulary ('applied'/'skipped') rather than the other
+// audits' ('fixed'/'not_applicable') — those two view components translate
 // AuditFindingCard's onMarkFixed/onMarkNotApplicable into these at the
 // component boundary.
 export const PATCH = withErrorHandling(async (
@@ -81,7 +84,6 @@ export const PATCH = withErrorHandling(async (
     .eq("id", findingId)
     .eq("app_id", id)
     .eq("workspace_id", workspaceId)
-    .eq("track", "seo")
     .single();
 
   if (!existing) {

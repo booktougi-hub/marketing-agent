@@ -1,6 +1,6 @@
 "use client";
 
-import { useRouter } from "next/navigation";
+import Link from "next/link";
 import { ChevronsUpDown, CircleDot, Plus } from "lucide-react";
 import {
   DropdownMenu,
@@ -53,7 +53,6 @@ export function AppSwitcher({
   className?: string;
   collapsed?: boolean;
 }) {
-  const router = useRouter();
   const { apps, selectedApp, selectedAppId, activeSection } = useDashboardApp();
 
   function hrefForApp(appId: string) {
@@ -119,7 +118,11 @@ export function AppSwitcher({
               return (
                 <DropdownMenuItem
                   key={app.id}
-                  onClick={() => router.push(hrefForApp(app.id))}
+                  // Rendered as a real <Link> (rather than a plain onClick +
+                  // router.push) so Next.js can prefetch each app's target
+                  // route while the dropdown is just open/hovered, instead
+                  // of only starting that fetch after the click.
+                  render={<Link href={hrefForApp(app.id)} />}
                   className={cn(
                     "gap-2 py-1.5",
                     isSelected && "bg-primary/10 text-foreground focus:bg-primary/15"
@@ -137,7 +140,7 @@ export function AppSwitcher({
           )}
         </DropdownMenuGroup>
         <DropdownMenuSeparator />
-        <DropdownMenuItem onClick={() => router.push("/dashboard/apps/new")} className="gap-2">
+        <DropdownMenuItem render={<Link href="/dashboard/apps/new" />} className="gap-2">
           <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-lg border border-dashed text-muted-foreground">
             <Plus className="h-3.5 w-3.5" />
           </span>

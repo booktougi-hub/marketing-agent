@@ -119,8 +119,24 @@ function PersonaCard({ persona, index }: { persona: StrategyPersona; index: numb
               Hangs out
             </p>
             <div className="flex flex-wrap gap-1.5">
+              {/* Tinted with this card's own accent color (colorVar, same
+                  one the avatar above uses) and squared off to rounded-lg
+                  instead of the bare `outline` variant's plain border +
+                  Badge's default rounded-4xl pill shape — same treatment as
+                  PillarCard's example-topic chips below, so both use the
+                  same color-mix-over-CSS-var chip pattern already
+                  established elsewhere in the app instead of looking like a
+                  separate, flatter style. */}
               {persona.where_they_hang_out.map((place, i) => (
-                <Badge key={i} variant="outline" className={WRAP_BADGE_CLASS}>
+                <Badge
+                  key={i}
+                  variant="outline"
+                  className={cn(WRAP_BADGE_CLASS, "rounded-lg border-transparent")}
+                  style={{
+                    backgroundColor: `color-mix(in oklch, ${colorVar} 14%, transparent)`,
+                    color: colorVar,
+                  }}
+                >
                   {place}
                 </Badge>
               ))}
@@ -155,8 +171,26 @@ function PillarCard({ pillar, index }: { pillar: StrategyContentPillar; index: n
 
         {pillar.example_topics?.length > 0 && (
           <div className="flex flex-wrap gap-1.5">
+            {/* Tinted with the card's own accent color (colorVar, same one
+                the icon badge above uses) instead of the flat neutral
+                `secondary` gray — same color-mix-over-CSS-var chip pattern
+                used everywhere else in the app (AuditFindingCard's severity
+                badges, ContentAngles' multiplier badges), so these read as
+                part of this card's theme rather than a generic gray chip.
+                Corners squared off to rounded-lg (Badge's own rounded-4xl
+                pill shape overridden via cn/twMerge) to match the outer
+                Card's own rounded-lg, rather than looking like a separate,
+                more-rounded shape language nested inside it. */}
             {pillar.example_topics.map((topic, i) => (
-              <Badge key={i} variant="secondary" className={WRAP_BADGE_CLASS}>
+              <Badge
+                key={i}
+                variant="outline"
+                className={cn(WRAP_BADGE_CLASS, "rounded-lg border-transparent")}
+                style={{
+                  backgroundColor: `color-mix(in oklch, ${colorVar} 14%, transparent)`,
+                  color: colorVar,
+                }}
+              >
                 {topic}
               </Badge>
             ))}

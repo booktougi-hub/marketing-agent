@@ -95,6 +95,7 @@ create table apps (
   product_type    text default 'other',          -- 'developer_tool' | 'mobile_app' | 'web_app' | 'saas' | 'browser_extension' | 'other'
   dna             jsonb,                         -- extracted DNA object (see DNA schema below)
   icon_url        text,                          -- app's favicon/logo, resolved during DNA extraction; null falls back to a first-letter avatar in the UI
+  screenshot_url  text,                          -- homepage screenshot (Firecrawl `screenshot` format), captured during DNA extraction/re-analysis; null until the first successful scrape — Settings > App Identity's live-preview box falls back to a placeholder when null
   status          text not null default 'pending',
   -- status values: 'pending' | 'extracting' | 'competitor_research_pending' | 'diagnosis_pending' | 'diagnosis_ready' | 'strategy_pending' | 'awaiting_approval' | 'active' | 'paused' | 'error' | 'deleted'
   is_paused       boolean not null default false,
@@ -119,6 +120,7 @@ create table apps (
   icp_data        jsonb,                         -- { summary: string, apollo_filters: {...} } from trigger/icp-inference.ts
   icp_status      text not null default 'pending_review',  -- 'pending_review' | 'approved' | 'needs_adjustment'
   diagnosis       jsonb,                         -- { bottleneck, reasoning, competitive_context, primary_lever, confidence } from trigger/diagnosis.ts
+  diagnosis_model text,                         -- model string (lib/ai/models.ts MODELS.HIGH_STAKES_SYNTHESIS, or SYNTHESIS_MODEL_OVERRIDE if set) that produced `diagnosis`, for comparing Opus- vs Sonnet-generated runs
   diagnosis_status text not null default 'pending',  -- 'pending' | 'shown' | 'acknowledged'
   diagnosis_refresh_status  text not null default 'none',  -- 'none' | 'proposal_ready' | 'reviewed' — see diagnosis_proposals below
   last_diagnosis_refresh_at timestamp with time zone,      -- when trigger/diagnosis-refresh-check.ts last actually ran for this app (set whether or not it produced a proposal), so the quarterly scan knows not to re-check early
@@ -227,6 +229,25 @@ create index idx_apps_status on apps(status);
 > (whether or not it found anything), `diagnosis_refresh_status =
 > 'proposal_ready'` only when it saved a `diagnosis_proposals` row. No RLS
 > change needed — `apps_all` already covers new columns on the same row.
+>
+> **Migration note (2026-07-26):** `diagnosis_model` was added via
+> `add_synthesis_model_tracking` (same migration that added
+> `strategies.model` below) — part of centralizing model routing into
+> `lib/ai/models.ts` and defaulting `trigger/diagnosis.ts` to the
+> `HIGH_STAKES_SYNTHESIS` tier (Opus) instead of Sonnet. Existing rows have
+> `diagnosis_model = null` (diagnosed before this column existed, all on
+> Sonnet). No RLS change needed — `apps_all` already covers new columns on
+> the same row.
+>
+> **Migration note (2026-07-27):** `screenshot_url` was added via
+> `add_screenshot_url_to_apps` — `trigger/dna-extraction.ts` now adds
+> `"screenshot"` to its existing Firecrawl `formats` array (the same scrape
+> that already resolves `icon_url`), so this costs no extra Firecrawl call.
+> Only overwritten when a new screenshot is actually captured (same
+> never-null-out-on-a-failed-run pattern as `icon_url`), and refreshes
+> whenever DNA is re-extracted (initial onboarding, or Settings > App
+> Identity's "Re-analyse App"). No RLS change needed — `apps_all` already
+> covers new columns on the same row.
 
 **DNA JSON structure (saved in `dna` column):**
 ```json
@@ -262,6 +283,7 @@ create table strategies (
   linkedin_strategy text,
   status          text default 'draft',   -- 'draft' | 'active' | 'superseded'
   version         integer default 1,
+  model           text,            -- model string (lib/ai/models.ts MODELS.HIGH_STAKES_SYNTHESIS, or SYNTHESIS_MODEL_OVERRIDE if set) that generated this row, for comparing Opus- vs Sonnet-generated strategies
   created_at      timestamp with time zone default now()
 );
 
@@ -278,6 +300,13 @@ create policy "strategies_all" on strategies
 create index idx_strategies_app_id on strategies(app_id);
 create index idx_strategies_status on strategies(status);
 ```
+
+> **Migration note (2026-07-26):** `model` was added via
+> `add_synthesis_model_tracking` (same migration that added
+> `apps.diagnosis_model` above) — see that note for context. Existing rows
+> have `model = null` (generated before this column existed, all on
+> Sonnet). No RLS change needed — `strategies_all` already covers new
+> columns on the same row.
 
 **Personas JSON structure:**
 ```json
@@ -837,7 +866,7 @@ create policy "diagnosis_proposals_all" on diagnosis_proposals
 
 ## Table: seo_geo_scores / seo_geo_findings
 
-SEO & GEO scoring engine — see SCORING.md for the full check registry, scoring math, and evidence citations. Two independent evaluation tracks (`track = 'seo' | 'geo'`), never blended into one score. Only the SEO track (`trigger/seo-geo-audit.ts`, `lib/seo/`) is built and populated so far; both tables' shapes already support `'geo'` rows so GEO doesn't need a second migration when it's built.
+SEO & GEO scoring engine — see SCORING.md for the full check registry, scoring math, and evidence citations. Two independent evaluation tracks (`track = 'seo' | 'geo'`), never blended into one score. Both tracks are built and populated by the same `trigger/seo-geo-audit.ts` run (`lib/seo/` for SEO, `lib/geo/` for GEO) — one Firecrawl scrape feeds both evaluators per run, per SCORING.md's "one engine, two tracks" architecture. `geo_citation_log` (per-engine ChatGPT/Perplexity/Gemini citation tracking, SCORING.md build-order step 7) is not built — it needs OpenAI/Perplexity API access this project doesn't have yet — but the main GEO score/findings don't depend on it.
 
 ```sql
 create table seo_geo_scores (
@@ -1097,6 +1126,40 @@ create index idx_pending_chat_actions_expires_at on pending_chat_actions(expires
 ```
 
 > **Migration note (2026-07-25):** Added via `create_chat_tables`, with `tool_use_id` added to `pending_chat_actions` shortly after via `add_tool_use_id_to_pending_chat_actions` (table was still empty, so a plain `not null` add was safe). Four deviations from the originally requested DDL, same pattern as `brand_information`'s migration note above: (1) added `workspace_id` to all three tables (the request only had it implicitly via `apps`/`chat_conversations` joins — every table needs its own column so every query can filter directly instead of joining out to derive it) with the standard `..._all` RLS policy, required by CLAUDE.md Rule #1 / this file's Core Rules; (2) used `uuid_generate_v4()` instead of `gen_random_uuid()` for primary key defaults, per Core Rule #3; (3) `chat_messages.workspace_id` specifically wasn't in the request's DDL at all — added for the same direct-filter reason as (1), populated from the parent `chat_conversations` row at insert time rather than joined per-query; (4) `pending_chat_actions.tool_use_id` wasn't in the request's DDL either — without it, `app/api/chat/confirm/route.ts` has no way to post a `tool_result` block back referencing the original `tool_use` block once the founder confirms or declines, which would leave that turn's assistant message permanently missing its required tool_result on the next chat request. `idx_chat_conversations_app_user` supports the route's "load or create the conversation for this app_id + user_id" lookup on every chat request.
+
+---
+
+## Table: chat_declines
+
+Logs one row per chat turn the coordinator declined as out of scope (see `DECLINE_MARKER` in `lib/chat/system-prompt.ts` — the model prefixes a decline with a fixed token so `app/api/chat/route.ts` can detect it and log without a second classification call; the token itself is stripped before the founder ever sees it). Write-only for now — nothing reads this table yet. It exists purely so the scope boundary in `SCOPED_SYSTEM_PROMPT` can be tuned later by periodically skimming real declined questions, instead of guessing the boundary upfront.
+
+```sql
+create table chat_declines (
+  id               uuid primary key default uuid_generate_v4(),
+  conversation_id  uuid references chat_conversations(id) on delete cascade not null,
+  app_id           uuid references apps(id) on delete cascade not null,
+  workspace_id     uuid references workspaces(id) on delete cascade not null,
+  user_message     text not null,
+  created_at       timestamp with time zone default now()
+);
+
+alter table chat_declines enable row level security;
+
+create policy "chat_declines_all" on chat_declines
+  for all using (
+    workspace_id in (
+      select workspace_id from workspace_members
+      where user_id = auth.uid()
+    )
+  );
+
+create index idx_chat_declines_conversation_id on chat_declines(conversation_id);
+create index idx_chat_declines_app_id on chat_declines(app_id);
+create index idx_chat_declines_workspace_id on chat_declines(workspace_id);
+create index idx_chat_declines_created_at on chat_declines(created_at);
+```
+
+> **Migration note (2026-07-27):** Added via `create_chat_declines`. Same `workspace_id` + `uuid_generate_v4()` + `..._all` RLS deviation from the originally requested DDL as the `create_chat_tables` migration note directly above — the request's DDL didn't include `workspace_id` or RLS at all, both required unconditionally by this file's Core Rules #1–#3.
 
 ---
 

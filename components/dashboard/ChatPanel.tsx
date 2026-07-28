@@ -13,6 +13,10 @@ import { parseApiError } from "@/lib/errors/parseApiError";
 import type { ChatMessage, ChatMessageRole } from "@/types";
 
 const EXPANDED_STORAGE_KEY = "agentmark-chat-expanded";
+const WIDTH_STORAGE_KEY = "agentmark-chat-width";
+const DEFAULT_WIDTH = 360;
+const MIN_WIDTH = 280;
+const MAX_WIDTH = 640;
 
 function ChatBubble({ role, children }: { role: ChatMessageRole; children: string }) {
   const isUser = role === "user";
@@ -204,12 +208,17 @@ function ChatPanelBody({
 // Layout-level, persistent chat panel — mounted once in DashboardShell (see
 // AppSidebar for the equivalent left-nav pattern this mirrors) so its
 // conversation state survives route changes across the whole dashboard.
-// Collapsed/expanded is a plain localStorage-backed two-state toggle, no
-// drag-to-resize.
+// Collapsed/expanded is a plain localStorage-backed two-state toggle. Width
+// is drag-resizable, but only at xl+ (see the resize handle below) — that's
+// the only breakpoint where this panel is a reflowed flex sibling rather
+// than a fixed overlay, so it's the only one where "wider panel, narrower
+// content" is a sensible interaction.
 export function ChatPanel() {
   const { selectedAppId } = useDashboardApp();
   const [expanded, setExpanded] = useState(false);
   const [hydrated, setHydrated] = useState(false);
+  const [width, setWidth] = useState(DEFAULT_WIDTH);
+  const [resizing, setResizing] = useState(false);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [loadingHistory, setLoadingHistory] = useState(false);
   const [input, setInput] = useState("");
@@ -217,8 +226,48 @@ export function ChatPanel() {
 
   useEffect(() => {
     setExpanded(window.localStorage.getItem(EXPANDED_STORAGE_KEY) === "1");
+    const storedWidth = Number(window.localStorage.getItem(WIDTH_STORAGE_KEY));
+    if (storedWidth >= MIN_WIDTH && storedWidth <= MAX_WIDTH) {
+      setWidth(storedWidth);
+    }
     setHydrated(true);
   }, []);
+
+  // Drag session lives entirely in this closure's variables (startX,
+  // startWidth, latestWidth) rather than component state — window listeners
+  // are attached/torn down per-drag so there's nothing to clean up on
+  // unmount, and `latestWidth` avoids reading stale state in
+  // handlePointerUp (the `width` state var is only current as of the render
+  // that started the drag).
+  function handleResizeStart(e: React.PointerEvent<HTMLDivElement>) {
+    e.preventDefault();
+    const startX = e.clientX;
+    const startWidth = width;
+    let latestWidth = startWidth;
+    setResizing(true);
+    document.body.style.cursor = "col-resize";
+    document.body.style.userSelect = "none";
+
+    function handlePointerMove(moveEvent: PointerEvent) {
+      // Handle sits on the panel's left edge; dragging left (negative dx)
+      // widens the panel since it's anchored to the right side.
+      const dx = moveEvent.clientX - startX;
+      latestWidth = Math.min(MAX_WIDTH, Math.max(MIN_WIDTH, startWidth - dx));
+      setWidth(latestWidth);
+    }
+
+    function handlePointerUp() {
+      window.removeEventListener("pointermove", handlePointerMove);
+      window.removeEventListener("pointerup", handlePointerUp);
+      setResizing(false);
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
+      window.localStorage.setItem(WIDTH_STORAGE_KEY, String(latestWidth));
+    }
+
+    window.addEventListener("pointermove", handlePointerMove);
+    window.addEventListener("pointerup", handlePointerUp);
+  }
 
   // Re-hydrates from the database on every app switch AND on initial
   // mount/refresh — this component is mounted once at the dashboard-shell
@@ -362,23 +411,41 @@ export function ChatPanel() {
           (not position:fixed), same architecture as AppSidebar's own
           collapsed/expanded width toggle, mirrored on the right edge. */}
       <div
+        style={{ "--chat-width": `${width}px` } as React.CSSProperties}
         className={cn(
           "hidden h-full shrink-0 flex-col border-l bg-sidebar md:flex",
-          hydrated && "transition-[width] duration-200 ease-out",
-          expanded ? "w-14 xl:w-[360px]" : "w-14"
+          hydrated && !resizing && "transition-[width] duration-200 ease-out",
+          expanded ? "w-14 xl:w-[var(--chat-width)]" : "w-14"
         )}
       >
         {expanded ? (
           // Below xl there isn't room to reflow, so this same box becomes a
           // fixed overlay instead of participating in the flex row's width;
-          // at xl+ it goes static and fills the 360px slot above, which is
-          // the actual reflow.
+          // at xl+ it goes relative (not static) and fills the --chat-width
+          // slot above, which is the actual reflow. It has to stay a
+          // positioned element (relative, not static) at xl+ too, or the
+          // resize handle below — which is absolutely positioned against
+          // this box — would escape to the nearest positioned ancestor up
+          // the tree instead of anchoring to this panel's edge.
           <div
             className={cn(
               "fixed inset-y-0 right-0 z-50 flex h-full w-[360px] max-w-[90vw] flex-col border-l bg-sidebar shadow-xl",
-              "xl:static xl:z-auto xl:h-full xl:w-full xl:max-w-none xl:border-l-0 xl:shadow-none"
+              "xl:relative xl:z-auto xl:h-full xl:w-full xl:max-w-none xl:border-l-0 xl:shadow-none"
             )}
           >
+            {/* Resize handle — xl+ only, since below xl this panel is a
+                fixed overlay rather than a reflowed sibling (see comment
+                above). */}
+            <div
+              role="separator"
+              aria-orientation="vertical"
+              aria-label="Resize chat panel"
+              onPointerDown={handleResizeStart}
+              className={cn(
+                "absolute inset-y-0 left-0 z-10 hidden w-1.5 -translate-x-1/2 cursor-col-resize touch-none xl:block",
+                resizing ? "bg-primary/40" : "hover:bg-primary/30"
+              )}
+            />
             <ChatPanelBody
               {...bodyProps}
               onCollapse={() => setExpandedPersisted(false)}

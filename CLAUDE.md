@@ -31,8 +31,8 @@
 | Image generation | Google Gemini API | Nano Banana Pro via Gemini |
 | Image processing | Sharp | Resizing and compression only |
 | Web scraping | Firecrawl API | DNA extraction from app URLs |
-| LLM — strategy | Anthropic Claude | Model: claude-sonnet-5 ONLY |
-| LLM — content | OpenRouter | Free Llama 3.3 70B for bulk content generation |
+| LLM — Claude | Anthropic Claude | Model routing centralized in `lib/ai/models.ts` — see LLM Calls below |
+| LLM — bulk content | OpenRouter | Free Llama 3.3 70B for bulk short-form content generation |
 | Cold email | Instantly.ai API | Sending only |
 | Prospect research | Apollo.io API | Contact sourcing |
 | Email verification | Hunter.io API | Before adding to cold email queue |
@@ -132,10 +132,16 @@
 - Always pass `workspace_id` and `app_id` as part of the job payload. Never query without them.
 
 ### LLM Calls
-- **Claude model:** always use `claude-sonnet-5`. Never use a different model string.
-- **Bulk content generation:** use OpenRouter with `meta-llama/llama-3.3-70b-instruct:free`.
+- **`lib/ai/models.ts` is the single source of truth for every model string.** Never hardcode a Claude or OpenRouter model string anywhere else — import `MODELS` (or `getHighStakesSynthesisModel()`) from that file instead. Rebalancing a tier is a one-line change there, not a per-file hunt.
+- **Tiers** (see `lib/ai/models.ts` for the full rationale on each):
+  - `MODELS.HIGH_STAKES_SYNTHESIS` (Opus) — the two highest-leverage, lowest-frequency calls only: `trigger/diagnosis.ts`, `trigger/strategy-generation.ts`. Accessed via `getHighStakesSynthesisModel()`, which respects the `SYNTHESIS_MODEL_OVERRIDE` env var for forcing a run back to Sonnet. Both jobs store the model that actually ran on the result row (`apps.diagnosis_model`, `strategies.model`) for Opus-vs-Sonnet comparison.
+  - `MODELS.SYNTHESIS` (Sonnet) — other multi-input synthesis jobs with narrower scope/downstream leverage.
+  - `MODELS.STANDARD` (Sonnet) — structured extraction, audits, chat coordination, content generation. The default tier for anything not called out above.
+  - `MODELS.BULK_CLASSIFICATION` (Haiku) — high-volume, low-stakes, per-item classification/extraction (`lib/research-job.ts`, shared by topic-research/problem-discovery/forum-opportunity-finder/seo-geo-audit).
+  - `MODELS.BULK_CONTENT_FREE` (`meta-llama/llama-3.3-70b-instruct:free`) — bulk short-form social content. Pin explicitly; never route through an unpinned "whichever has capacity" alias for anything that produces public-facing brand content. `trigger/content-generation.ts` tries this model first and only falls back to an unpinned alias on an actual rate-limit at call time, logging when that happens.
 - Always parse LLM JSON responses inside a try/catch. Never assume valid JSON.
 - Always include a system prompt that specifies the output format before the user prompt.
+- Repeated static system prompts/context (audits, refresh checks) should use a `cache_control: { type: "ephemeral" }` breakpoint — see the existing jobs for the pattern.
 
 ### Components
 - Use shadcn/ui components as the base. Do not build custom UI from scratch unless shadcn has no equivalent.
@@ -150,7 +156,7 @@
 2. **Never expose service role key client-side.** Zero exceptions.
 3. **Never hardcode API keys.** Zero exceptions.
 4. **Never build V2+ features during V1.** If the feature is not in the V1 checklist in PHASES.md, it does not get built now.
-5. **Never use a different Claude model string.** Only `claude-sonnet-5`.
+5. **Never hardcode a Claude or OpenRouter model string outside `lib/ai/models.ts`.** Every call site imports `MODELS` (or `getHighStakesSynthesisModel()`) from there — see LLM Calls above for the tiers.
 6. **Never send emails or publish posts without the workspace approval gate** — for cold email and ad spend specifically.
 7. **Never store workspace credentials (OAuth tokens, API keys) in plaintext.** Encrypt with AES-256 before storing.
 

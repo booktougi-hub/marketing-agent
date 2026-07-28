@@ -2,14 +2,20 @@ import { logger, schemaTask } from "@trigger.dev/sdk";
 import { z } from "zod";
 import { supabaseAdmin } from "@/lib/supabase-server";
 import { createAnthropicClient } from "@/lib/anthropic-client";
+import { getHighStakesSynthesisModel } from "@/lib/ai/models";
 import { handleJobError } from "@/lib/errors/jobErrorHandler";
 import { callExternalService, ExternalServiceError } from "@/lib/errors/AppError";
 import { ErrorMessages } from "@/lib/errors/messages";
 import type { AppDna, CompetitorResearch } from "@/types";
 
-// Spec called for "claude-sonnet-4-20250514" — CLAUDE.md is explicit and
-// non-negotiable: always claude-sonnet-5, never a different model string.
-const CLAUDE_MODEL = "claude-sonnet-5";
+// This is one of the two HIGH_STAKES_SYNTHESIS jobs (see lib/ai/models.ts)
+// — a single judgment everything downstream (strategy, content) inherits,
+// running once per app plus occasional refreshes, so it defaults to Opus
+// rather than Sonnet. getHighStakesSynthesisModel() reads
+// SYNTHESIS_MODEL_OVERRIDE if set, letting a specific run be forced back
+// to Sonnet for side-by-side comparison. Whichever model actually ran is
+// stored on apps.diagnosis_model below so past and future runs stay
+// comparable.
 
 const payloadSchema = z.object({
   app_id: z.string(),
@@ -106,9 +112,10 @@ ${app.additional_context ? `\n=== ADDITIONAL DEVELOPER NOTES ===\n${app.addition
 ${formatCompetitorResearch(competitors)}`;
 
       const anthropic = createAnthropicClient();
+      const modelUsed = getHighStakesSynthesisModel();
       const message = await callExternalService("claude", ErrorMessages.external.CLAUDE_FAILED, () =>
         anthropic.messages.create({
-          model: CLAUDE_MODEL,
+          model: modelUsed,
           max_tokens: 1024,
           system: SYSTEM_PROMPT,
           messages: [{ role: "user", content: userMessage }],
@@ -154,6 +161,7 @@ ${formatCompetitorResearch(competitors)}`;
         .from("apps")
         .update({
           diagnosis: diagnosisData,
+          diagnosis_model: modelUsed,
           diagnosis_status: "shown",
           status: "diagnosis_ready",
           pending_run_id: null,

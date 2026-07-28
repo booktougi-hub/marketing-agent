@@ -1,10 +1,12 @@
 "use client";
 
 import Link from "next/link";
-import { Loader2, Pencil, Sparkles, Trash2 } from "lucide-react";
+import { Calendar, Loader2, Pencil, Sparkles, Trash2 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { MarkdownContent } from "@/components/apps/markdown-content";
 import { getMarkdownPreview } from "@/lib/markdown";
@@ -21,6 +23,31 @@ export function formatDateTime(value: string | null) {
     dateStyle: "medium",
     timeStyle: "short",
   });
+}
+
+// `<input type="date">`/`<input type="time">` work in the browser's local
+// time (not UTC), so these convert to/from that local wall-clock
+// representation — matching what formatDateTime already shows the user via
+// toLocaleString, rather than exposing the underlying UTC-stored value.
+export function toDateInputValue(value: string): string {
+  const d = new Date(value);
+  const yyyy = d.getFullYear();
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  const dd = String(d.getDate()).padStart(2, "0");
+  return `${yyyy}-${mm}-${dd}`;
+}
+
+export function toTimeInputValue(value: string): string {
+  const d = new Date(value);
+  const hh = String(d.getHours()).padStart(2, "0");
+  const mi = String(d.getMinutes()).padStart(2, "0");
+  return `${hh}:${mi}`;
+}
+
+export function combineDateAndTime(dateValue: string, timeValue: string): string {
+  const [year, month, day] = dateValue.split("-").map(Number);
+  const [hours, minutes] = timeValue.split(":").map(Number);
+  return new Date(year, month - 1, day, hours, minutes, 0, 0).toISOString();
 }
 
 export function PlatformBadge({ platform }: { platform: ContentPlatform }) {
@@ -67,6 +94,10 @@ export function PlannedPostCard({
   isEditing,
   editingBody,
   onEditingBodyChange,
+  editingDate,
+  editingTime,
+  onEditingDateChange,
+  onEditingTimeChange,
   saving,
   error,
   onStartEdit,
@@ -79,6 +110,10 @@ export function PlannedPostCard({
   isEditing: boolean;
   editingBody: string;
   onEditingBodyChange: (value: string) => void;
+  editingDate: string;
+  editingTime: string;
+  onEditingDateChange: (value: string) => void;
+  onEditingTimeChange: (value: string) => void;
   saving: boolean;
   error: string | null;
   onStartEdit: () => void;
@@ -98,7 +133,33 @@ export function PlannedPostCard({
           )}
         </div>
 
-        <p className="text-xs text-muted-foreground">{formatDateTime(item.scheduled_at)}</p>
+        {isEditing ? (
+          <div className="flex flex-col gap-1.5 rounded-lg border bg-muted/30 p-2.5">
+            <Label className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
+              <Calendar className="size-3.5" />
+              Scheduled for
+            </Label>
+            <div className="flex gap-2">
+              <Input
+                type="date"
+                value={editingDate}
+                onChange={(e) => onEditingDateChange(e.target.value)}
+                className="flex-1"
+              />
+              <Input
+                type="time"
+                value={editingTime}
+                onChange={(e) => onEditingTimeChange(e.target.value)}
+                className="w-28 shrink-0"
+              />
+            </div>
+          </div>
+        ) : (
+          <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
+            <Calendar className="size-3.5" />
+            {formatDateTime(item.scheduled_at)}
+          </p>
+        )}
 
         {isArticle ? (
           <ArticlePreview body={item.body} />
@@ -133,7 +194,7 @@ export function PlannedPostCard({
                 type="button"
                 size="sm"
                 onClick={onSave}
-                disabled={saving || editingBody.trim().length === 0}
+                disabled={saving || editingBody.trim().length === 0 || !editingDate || !editingTime}
               >
                 {saving && <Loader2 className="animate-spin" />}
                 Save

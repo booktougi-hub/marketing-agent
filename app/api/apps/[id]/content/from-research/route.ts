@@ -16,9 +16,10 @@ import {
   InternalError,
   ExternalServiceError,
 } from "@/lib/errors/AppError";
+import { MODELS } from "@/lib/ai/models";
 import type { AppDna, ResearchStream } from "@/types";
 
-const CLAUDE_MODEL = "claude-sonnet-5";
+const CLAUDE_MODEL: string = MODELS.STANDARD;
 
 const DRAFT_PLATFORMS = ["twitter", "linkedin", "devto"] as const;
 type DraftPlatform = (typeof DRAFT_PLATFORMS)[number];
