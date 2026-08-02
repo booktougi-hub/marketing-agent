@@ -8,6 +8,7 @@ import {
   getCooldownHoursRemaining,
   getRemainingCredits,
   isCreditsResetDue,
+  type AgentActionCooldowns,
   type AgentActionType,
 } from "@/lib/agentCredits";
 import {
@@ -24,6 +25,10 @@ import { appRunTag } from "@/lib/jobHealthRegistry";
 import { ForbiddenError, RateLimitError } from "@/lib/errors/AppError";
 import { ErrorMessages } from "@/lib/errors/messages";
 import { parseForumOpportunity } from "@/lib/opportunity";
+import { searchForumsLive, type ForumSearchPlatform } from "@/lib/chat/forum-search";
+import { MARKETING_SKILLS } from "@/lib/chat/skills-registry";
+import { readFile } from "node:fs/promises";
+import path from "node:path";
 import type { contentGeneration } from "@/trigger/content-generation";
 import type { onboardingAudit } from "@/trigger/onboarding-audit";
 import type { churnAudit } from "@/trigger/churn-audit";
@@ -105,7 +110,7 @@ export const CHAT_TOOLS: ChatToolDefinition[] = [
   {
     name: "get_credit_balance",
     description:
-      "Get this app's remaining weekly agent credits, its allowance, when it resets, and whether the manual-action cooldown is active. Call this before proposing a credit-costing action, or when the user asks how many credits/scans they have left.",
+      "Get this app's remaining weekly agent credits, its allowance, when it resets, and which specific action types (if any) are currently on cooldown. Call this before proposing a credit-costing action, or when the user asks how many credits/scans they have left.",
     input_schema: {
       type: "object",
       properties: {},
@@ -214,6 +219,57 @@ export const CHAT_TOOLS: ChatToolDefinition[] = [
     name: "get_influencer_candidates",
     description:
       "Get discovered influencer candidates for this app. NOT YET AVAILABLE — this feature hasn't been built. Only call this if the user explicitly asks about influencer discovery; the result will tell you it isn't available yet so you can relay that honestly.",
+    input_schema: {
+      type: "object",
+      properties: {},
+      additionalProperties: false,
+    },
+    requiresConfirmation: false,
+  },
+  {
+    name: "search_forums_live",
+    description:
+      "Search a specific forum/community platform live, right now, for real threads matching a query. Distinct from get_forum_opportunities (which reads what the scheduled forum-opportunity-finder job already found and cached) — use this when the founder wants a fresh, real-time search instead. Covers reddit, hacker_news, product_hunt, stack_overflow, and indie_hackers only. Quora, LinkedIn, and X are not supported — say so plainly if asked about those rather than guessing or pretending to have searched.",
+    input_schema: {
+      type: "object",
+      properties: {
+        platform: {
+          type: "string",
+          enum: ["reddit", "hacker_news", "product_hunt", "stack_overflow", "indie_hackers"],
+        },
+        query: { type: "string", description: "What to search for, e.g. a competitor name or a pain point." },
+      },
+      required: ["platform", "query"],
+      additionalProperties: false,
+    },
+    requiresConfirmation: false,
+  },
+  {
+    name: "get_marketing_playbook",
+    description:
+      "Get the full reasoning framework for one marketing topic (e.g. cold-email, pricing, seo-audit, community-marketing) — the same domain expertise this tool's own background jobs are grounded in. Call this instead of relying on general knowledge whenever the user's question maps to one of these topics, even if they didn't name it — you don't need to tell the user you're consulting a specific playbook. `popups` and `paywalls` are included for advisory answers only — this product never implements or embeds either into a customer's live app, so only ever explain/recommend, never offer to build one.",
+    input_schema: {
+      type: "object",
+      properties: {
+        skill_topic: {
+          type: "string",
+          description:
+            "The marketing topic slug, e.g. 'cold-email', 'pricing', 'seo-audit', 'community-marketing'. Must be one of the known topics — if unsure which one fits, ask the user a brief clarifying question first rather than guessing.",
+        },
+        question: {
+          type: "string",
+          description: "The user's actual question, for context on which part of the playbook is most relevant.",
+        },
+      },
+      required: ["skill_topic", "question"],
+      additionalProperties: false,
+    },
+    requiresConfirmation: false,
+  },
+  {
+    name: "get_publishing_schedule",
+    description:
+      "Get this app's configured publishing cadence per platform (posting frequency, hours/days, and timezone). Call this before proposing a suggested date/time via add_content_to_plan, so the suggestion is grounded in the app's actual cadence instead of a guess.",
     input_schema: {
       type: "object",
       properties: {},
@@ -369,13 +425,40 @@ export const CHAT_TOOLS: ChatToolDefinition[] = [
     },
     requiresConfirmation: true,
   },
+  {
+    name: "add_content_to_plan",
+    description:
+      "Propose saving a generated artifact (a social post, a forum reply, an outreach message) to this app's content queue, scheduled for a specific date/time. Call this ALONGSIDE your text answer, in the same turn, whenever you've just generated a concrete piece of content with a plausible save/schedule action — never for general advice or an explanation with nothing concrete to save. Always call get_publishing_schedule first and compute suggested_date/suggested_time from THIS app's actual cadence for the target platform — never a hardcoded default or a guess. For a platform with no configured cadence (a forum reply, an outreach message), suggest posting promptly rather than picking an arbitrary future date, since delaying reduces relevance. This renders as an inline confirm card the founder reviews before anything is saved — nothing is queued until they confirm.",
+    input_schema: {
+      type: "object",
+      properties: {
+        content: { type: "string", description: "The generated text — the post, reply, or message itself." },
+        platform: {
+          type: "string",
+          description:
+            "Which platform this targets, e.g. 'twitter', 'linkedin', 'instagram', 'facebook', 'devto', or a forum/outreach target like 'reddit'. Not restricted to the publishing-schedule platforms — this tool is platform-agnostic.",
+        },
+        suggested_date: {
+          type: "string",
+          description: "Suggested date in YYYY-MM-DD form, computed from get_publishing_schedule's result for this platform.",
+        },
+        suggested_time: {
+          type: "string",
+          description: "Suggested time in 24-hour HH:MM form, computed the same way.",
+        },
+      },
+      required: ["content", "platform", "suggested_date", "suggested_time"],
+      additionalProperties: false,
+    },
+    requiresConfirmation: true,
+  },
 ];
 
 // What actually gets sent as the API request's `tools` param — our
 // `requiresConfirmation` field stripped, since it isn't part of Anthropic's
-// tool schema. Tools render before `system` in the cached prefix (see
-// SKILL.md's prompt-caching quick reference), so this array's stability is
-// exactly as load-bearing for the cache as the system prompt's.
+// tool schema. Tools render before `system` in the cached prefix, so this
+// array's stability is exactly as load-bearing for the cache as the system
+// prompt's.
 export const CLAUDE_TOOL_DEFINITIONS = CHAT_TOOLS.map(({ name, description, input_schema }) => ({
   name,
   description,
@@ -513,7 +596,7 @@ export const READ_ONLY_HANDLERS: Record<
   async get_credit_balance(_input, ctx) {
     const { data: app } = await supabaseAdmin
       .from("apps")
-      .select("agent_credits_used_this_week, agent_credits_reset_at, last_agent_action_at")
+      .select("agent_credits_used_this_week, agent_credits_reset_at, agent_action_cooldowns")
       .eq("id", ctx.appId)
       .eq("workspace_id", ctx.workspaceId)
       .single();
@@ -533,11 +616,21 @@ export const READ_ONLY_HANDLERS: Record<
       planTier
     );
 
+    // Per-action-type now (2026-07-29) — each action cools down
+    // independently, so there's no single number to report. Only actions
+    // currently on cooldown are included; anything absent is available now.
+    const cooldowns = (app?.agent_action_cooldowns ?? {}) as AgentActionCooldowns;
+    const activeCooldowns = Object.fromEntries(
+      (Object.keys(cooldowns) as AgentActionType[])
+        .map((actionType) => [actionType, getCooldownHoursRemaining(cooldowns, actionType)] as const)
+        .filter(([, hours]) => hours > 0)
+    );
+
     return {
       remaining,
       allowance,
       resets_at: resetsAt.toISOString(),
-      cooldown_hours_remaining: getCooldownHoursRemaining(app?.last_agent_action_at ?? null),
+      cooldown_hours_remaining_by_action: activeCooldowns,
     };
   },
 
@@ -730,6 +823,58 @@ export const READ_ONLY_HANDLERS: Record<
   async get_influencer_candidates() {
     return { available: false, message: "Influencer candidate discovery isn't available yet." };
   },
+
+  // Live external search — see lib/chat/forum-search.ts for the per-platform
+  // dispatch, why Reddit reuses Firecrawl's site-filtered search instead of
+  // a real Reddit API client (none exists in this project), and why Quora/
+  // LinkedIn/X aren't covered. ctx (appId/workspaceId) is unused — this
+  // reads public external data, not anything scoped to this app/workspace.
+  async search_forums_live(input) {
+    const platform = String(input.platform ?? "") as ForumSearchPlatform;
+    const query = String(input.query ?? "").trim();
+    if (!query) {
+      return { platform, available: false, error: "No search query provided.", hits: [] };
+    }
+    return searchForumsLive(platform, query);
+  },
+
+  // Reads a skill's full SKILL.md verbatim, no summarization/preprocessing —
+  // same design-time-only content the Audits-family jobs and the other
+  // skill-wired prompts (see PHASES.md's 2026-08-01 entries) were manually
+  // adapted from, now available to the live coordinator on demand instead of
+  // only through whichever job happened to get it baked in at author time.
+  async get_marketing_playbook(input) {
+    const skillTopic = String(input.skill_topic ?? "");
+    const relativePath = MARKETING_SKILLS[skillTopic];
+    if (!relativePath) {
+      return {
+        found: false,
+        error: `Unknown skill_topic "${skillTopic}". Known topics: ${Object.keys(MARKETING_SKILLS).join(", ")}.`,
+      };
+    }
+
+    try {
+      const content = await readFile(path.join(process.cwd(), relativePath), "utf-8");
+      return { found: true, skill_topic: skillTopic, content };
+    } catch {
+      return { found: false, error: `Could not read the playbook for "${skillTopic}".` };
+    }
+  },
+
+  // Mirrors app/api/apps/[id]/settings/route.ts's publishing_schedule read —
+  // grounds add_content_to_plan's suggested_date/suggested_time in this
+  // app's real cadence instead of the model guessing one.
+  async get_publishing_schedule(_input, ctx) {
+    const { data: app } = await supabaseAdmin
+      .from("apps")
+      .select("app_settings")
+      .eq("id", ctx.appId)
+      .eq("workspace_id", ctx.workspaceId)
+      .maybeSingle();
+
+    const currentSettings = (app?.app_settings ?? {}) as Record<string, unknown>;
+    return parsePublishingSchedule(currentSettings.publishing_schedule);
+  },
 };
 
 // ---------------------------------------------------------------------------
@@ -823,7 +968,7 @@ export const MUTATING_TOOL_HANDLERS: Record<string, MutatingToolHandlers> = {
 
       const { data: app } = await supabaseAdmin
         .from("apps")
-        .select("agent_credits_used_this_week, agent_credits_reset_at, last_agent_action_at")
+        .select("agent_credits_used_this_week, agent_credits_reset_at, agent_action_cooldowns")
         .eq("id", ctx.appId)
         .eq("workspace_id", ctx.workspaceId)
         .single();
@@ -844,7 +989,8 @@ export const MUTATING_TOOL_HANDLERS: Record<string, MutatingToolHandlers> = {
         throw new ForbiddenError(affordCheck.reason ?? ErrorMessages.research.NO_CREDITS_REMAINING);
       }
 
-      const cooldownHoursRemaining = getCooldownHoursRemaining(app.last_agent_action_at);
+      const cooldowns = (app.agent_action_cooldowns ?? {}) as AgentActionCooldowns;
+      const cooldownHoursRemaining = getCooldownHoursRemaining(cooldowns, actionType);
       if (cooldownHoursRemaining > 0) {
         throw new RateLimitError(ErrorMessages.research.COOLDOWN_ACTIVE, "RATE_LIMITED", {
           retryAfter: cooldownHoursRemaining,
@@ -861,7 +1007,7 @@ export const MUTATING_TOOL_HANDLERS: Record<string, MutatingToolHandlers> = {
         .update({
           agent_credits_used_this_week: currentUsed + cost,
           agent_credits_reset_at: resetDue ? nowIso : app.agent_credits_reset_at,
-          last_agent_action_at: nowIso,
+          agent_action_cooldowns: { ...cooldowns, [actionType]: nowIso },
         })
         .eq("id", ctx.appId)
         .eq("workspace_id", ctx.workspaceId);
@@ -898,7 +1044,7 @@ export const MUTATING_TOOL_HANDLERS: Record<string, MutatingToolHandlers> = {
       const { data: app } = await supabaseAdmin
         .from("apps")
         .select(
-          "agent_credits_used_this_week, agent_credits_reset_at, last_agent_action_at, diagnosis_status, diagnosis_refresh_status"
+          "agent_credits_used_this_week, agent_credits_reset_at, agent_action_cooldowns, diagnosis_status, diagnosis_refresh_status"
         )
         .eq("id", ctx.appId)
         .eq("workspace_id", ctx.workspaceId)
@@ -926,7 +1072,8 @@ export const MUTATING_TOOL_HANDLERS: Record<string, MutatingToolHandlers> = {
         throw new ForbiddenError(affordCheck.reason ?? ErrorMessages.research.NO_CREDITS_REMAINING);
       }
 
-      const cooldownHoursRemaining = getCooldownHoursRemaining(app.last_agent_action_at);
+      const cooldowns = (app.agent_action_cooldowns ?? {}) as AgentActionCooldowns;
+      const cooldownHoursRemaining = getCooldownHoursRemaining(cooldowns, "diagnosis_refresh");
       if (cooldownHoursRemaining > 0) {
         throw new RateLimitError(ErrorMessages.research.COOLDOWN_ACTIVE, "RATE_LIMITED", {
           retryAfter: cooldownHoursRemaining,
@@ -943,7 +1090,7 @@ export const MUTATING_TOOL_HANDLERS: Record<string, MutatingToolHandlers> = {
         .update({
           agent_credits_used_this_week: currentUsed + cost,
           agent_credits_reset_at: resetDue ? nowIso : app.agent_credits_reset_at,
-          last_agent_action_at: nowIso,
+          agent_action_cooldowns: { ...cooldowns, diagnosis_refresh: nowIso },
         })
         .eq("id", ctx.appId)
         .eq("workspace_id", ctx.workspaceId);
@@ -1034,7 +1181,7 @@ export const MUTATING_TOOL_HANDLERS: Record<string, MutatingToolHandlers> = {
     async execute(_input, ctx) {
       const { data: app } = await supabaseAdmin
         .from("apps")
-        .select("agent_credits_used_this_week, agent_credits_reset_at, last_agent_action_at")
+        .select("agent_credits_used_this_week, agent_credits_reset_at, agent_action_cooldowns")
         .eq("id", ctx.appId)
         .eq("workspace_id", ctx.workspaceId)
         .single();
@@ -1055,7 +1202,8 @@ export const MUTATING_TOOL_HANDLERS: Record<string, MutatingToolHandlers> = {
         throw new ForbiddenError(affordCheck.reason ?? ErrorMessages.research.NO_CREDITS_REMAINING);
       }
 
-      const cooldownHoursRemaining = getCooldownHoursRemaining(app.last_agent_action_at);
+      const cooldowns = (app.agent_action_cooldowns ?? {}) as AgentActionCooldowns;
+      const cooldownHoursRemaining = getCooldownHoursRemaining(cooldowns, "forum_opportunity_scan");
       if (cooldownHoursRemaining > 0) {
         throw new RateLimitError(ErrorMessages.research.COOLDOWN_ACTIVE, "RATE_LIMITED", {
           retryAfter: cooldownHoursRemaining,
@@ -1072,7 +1220,7 @@ export const MUTATING_TOOL_HANDLERS: Record<string, MutatingToolHandlers> = {
         .update({
           agent_credits_used_this_week: currentUsed + cost,
           agent_credits_reset_at: resetDue ? nowIso : app.agent_credits_reset_at,
-          last_agent_action_at: nowIso,
+          agent_action_cooldowns: { ...cooldowns, forum_opportunity_scan: nowIso },
         })
         .eq("id", ctx.appId)
         .eq("workspace_id", ctx.workspaceId);
@@ -1130,6 +1278,56 @@ export const MUTATING_TOOL_HANDLERS: Record<string, MutatingToolHandlers> = {
     },
     async execute() {
       return { trackingId: null };
+    },
+  },
+
+  // Writes to the exact same `content` table trigger/content-generation.ts
+  // already queues scheduled drafts to — no second content-queue table or
+  // path. content_type is always "post": that column only distinguishes
+  // long-form articles (see content-generation.ts's devto branch) from
+  // everything else, and every artifact this tool saves (social posts,
+  // forum replies, outreach messages) is short-form. platform/strategy_id
+  // are intentionally not restricted to the publishing-schedule platform
+  // set or tied to a strategy — this tool is platform-agnostic and the
+  // content it saves is chat-generated, not strategy-derived.
+  add_content_to_plan: {
+    async computeCreditCost() {
+      return 0;
+    },
+    async execute(input, ctx) {
+      const content = String(input.content ?? "").trim();
+      const platform = String(input.platform ?? "").trim();
+      const suggestedDate = String(input.suggested_date ?? "").trim();
+      const suggestedTime = String(input.suggested_time ?? "").trim();
+
+      if (!content || !platform) {
+        throw new ForbiddenError(ErrorMessages.generic.UNKNOWN, "INVALID_CONTENT_INPUT");
+      }
+
+      const scheduledAt =
+        suggestedDate && suggestedTime ? new Date(`${suggestedDate}T${suggestedTime}:00Z`) : null;
+      const scheduledAtIso =
+        scheduledAt && !Number.isNaN(scheduledAt.getTime()) ? scheduledAt.toISOString() : null;
+
+      const { data: inserted, error } = await supabaseAdmin
+        .from("content")
+        .insert({
+          app_id: ctx.appId,
+          workspace_id: ctx.workspaceId,
+          platform,
+          content_type: "post",
+          body: content,
+          status: "scheduled",
+          scheduled_at: scheduledAtIso,
+        })
+        .select("id")
+        .single();
+
+      if (error || !inserted) {
+        throw new ForbiddenError(ErrorMessages.generic.UNKNOWN, "CONTENT_SAVE_FAILED");
+      }
+
+      return { trackingId: inserted.id };
     },
   },
 };
@@ -1220,6 +1418,18 @@ export function describeToolProposal(
         description: "This feature isn't built yet.",
         effect: "Nothing will actually run — confirming just acknowledges that.",
       };
+    case "add_content_to_plan": {
+      const platform = typeof input.platform === "string" && input.platform.trim() ? input.platform.trim() : "this platform";
+      const date = typeof input.suggested_date === "string" ? input.suggested_date.trim() : "";
+      const time = typeof input.suggested_time === "string" ? input.suggested_time.trim() : "";
+      const when = date && time ? `${date} at ${time}` : date || "no suggested date/time was given";
+      return {
+        label: `Save ${platform} content to plan`,
+        severity: "low",
+        description: `Save this generated ${platform} content to your content queue, scheduled for ${when}.`,
+        effect: `Adds one new "scheduled" item to your content queue for ${platform}. Nothing publishes automatically — it follows the same review path as every other queued item.`,
+      };
+    }
     default:
       return {
         label: toolName,
@@ -1236,4 +1446,18 @@ export function isMutatingTool(toolName: string): boolean {
 
 export function isKnownTool(toolName: string): boolean {
   return CHAT_TOOLS.some((t) => t.name === toolName);
+}
+
+// Explicit allowlist of "proactive offer" tools — mutating tools the
+// coordinator calls unprompted, alongside its text answer, rather than only
+// because the founder asked for that exact action. app/api/chat/route.ts
+// logs a chat_action_suggestions row (status 'offered') only for tools in
+// this set, and app/api/chat/confirm/route.ts flips it to 'confirmed'/
+// 'dismissed'. Kept as an explicit opt-in rather than "every mutating tool
+// logs here" so a future ordinary mutating tool doesn't silently start
+// polluting this table.
+const PROACTIVE_OFFER_TOOLS = new Set<string>(["add_content_to_plan"]);
+
+export function isProactiveOfferTool(toolName: string): boolean {
+  return PROACTIVE_OFFER_TOOLS.has(toolName);
 }

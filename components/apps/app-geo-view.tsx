@@ -51,12 +51,12 @@ async function submitFindingFeedback(appId: string, findingId: string, note: str
   }
 }
 
-function DemoGeoPreview({ appId, planTier, agentCreditsUsedThisWeek, agentCreditsResetAt, lastAgentActionAt, nextAuditRun }: {
+function DemoGeoPreview({ appId, planTier, agentCreditsUsedThisWeek, agentCreditsResetAt, agentActionCooldowns, nextAuditRun }: {
   appId: string;
   planTier: PlanTier;
   agentCreditsUsedThisWeek: number;
   agentCreditsResetAt: string | null;
-  lastAgentActionAt: string | null;
+  agentActionCooldowns: Record<string, string> | null;
   nextAuditRun: Date;
 }) {
   const [demoFindings, setDemoFindings] = useState(DEMO_GEO_FINDINGS);
@@ -92,7 +92,7 @@ function DemoGeoPreview({ appId, planTier, agentCreditsUsedThisWeek, agentCredit
         planTier={planTier}
         agentCreditsUsedThisWeek={agentCreditsUsedThisWeek}
         agentCreditsResetAt={agentCreditsResetAt}
-        lastAgentActionAt={lastAgentActionAt}
+        agentActionCooldowns={agentActionCooldowns}
         nextRunAt={nextAuditRun}
       />
     </div>
@@ -106,7 +106,7 @@ export function AppGeoView({
   planTier,
   agentCreditsUsedThisWeek,
   agentCreditsResetAt,
-  lastAgentActionAt,
+  agentActionCooldowns,
 }: {
   appId: string;
   initialFindings: SeoGeoFinding[];
@@ -114,7 +114,7 @@ export function AppGeoView({
   planTier: PlanTier;
   agentCreditsUsedThisWeek: number;
   agentCreditsResetAt: string | null;
-  lastAgentActionAt: string | null;
+  agentActionCooldowns: Record<string, string> | null;
 }) {
   const [findings, setFindings] = useState(initialFindings);
 
@@ -172,7 +172,7 @@ export function AppGeoView({
         planTier={planTier}
         agentCreditsUsedThisWeek={agentCreditsUsedThisWeek}
         agentCreditsResetAt={agentCreditsResetAt}
-        lastAgentActionAt={lastAgentActionAt}
+        agentActionCooldowns={agentActionCooldowns}
         nextAuditRun={nextAuditRun}
       />
     );

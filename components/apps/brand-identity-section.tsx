@@ -3,9 +3,7 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
-  AlertTriangle,
   BarChart3,
-  ChevronDown,
   Fingerprint,
   Globe,
   Loader2,
@@ -20,10 +18,7 @@ import {
   Trash2,
   Upload,
   User,
-  X,
 } from "lucide-react";
-import type { LucideIcon } from "lucide-react";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import {
@@ -35,9 +30,18 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { ErrorMessage } from "@/components/shared/ErrorMessage";
+import {
+  AutoAnalysisErrorBanner,
+  EMPTY_FIELD_CLASS,
+  EMPTY_PLACEHOLDER,
+  FieldLabel,
+  ProcessingCard,
+  SectionCard,
+  SUNKEN_INPUT_CLASS,
+  TagInput,
+} from "@/components/apps/extraction-field-controls";
 import { parseApiError } from "@/lib/errors/parseApiError";
 import { supabase } from "@/lib/supabase";
 import { cn } from "@/lib/utils";
@@ -56,123 +60,13 @@ import type {
 } from "@/types";
 
 // ---------------------------------------------------------------------------
-// Small shared building blocks
+// Small shared building blocks — AutoBadge/FieldLabel/TagInput/SectionCard
+// and the EMPTY_FIELD_CLASS/EMPTY_PLACEHOLDER/SUNKEN_INPUT_CLASS constants
+// now live in components/apps/extraction-field-controls.tsx (imported
+// above) so the Product Information page reuses the exact same pattern
+// instead of a second copy. Everything below here is Brand-Identity-
+// specific (structured editors for key stats, pricing, socials, colors).
 // ---------------------------------------------------------------------------
-
-function AutoBadge({ source }: { source: "auto" | "manual" | undefined }) {
-  if (source !== "auto") return null;
-  return (
-    <Badge variant="outline" className="gap-1">
-      <Sparkles className="h-2.5 w-2.5" />
-      Auto-filled
-    </Badge>
-  );
-}
-
-// Small uppercase, letter-spaced label — matches DESIGN.md's "label-sm"
-// (Geist, tracked, uppercase) treatment for field labels/tags, distinct
-// from prose body text.
-function FieldLabel({
-  htmlFor,
-  source,
-  suffix,
-  children,
-}: {
-  htmlFor?: string;
-  source?: "auto" | "manual" | undefined;
-  suffix?: React.ReactNode;
-  children: React.ReactNode;
-}) {
-  return (
-    <div className="flex items-center justify-between gap-2">
-      <Label
-        htmlFor={htmlFor}
-        className="font-mono text-[11px] font-medium tracking-wider text-muted-foreground uppercase"
-      >
-        {children}
-      </Label>
-      {suffix ?? <AutoBadge source={source} />}
-    </div>
-  );
-}
-
-// Applied to any input/textarea whose current value is empty, so an
-// unfilled field reads as "waiting for input" rather than "broken" —
-// per the design requirement, empty auto-extractable fields must look
-// deliberately empty, not blank/glitched.
-const EMPTY_FIELD_CLASS = "border-dashed";
-const EMPTY_PLACEHOLDER = "Not found — add manually";
-
-// Every field input sits visibly recessed below its card's own surface
-// (DESIGN.md: "Input Fields: ...dark background #0A0A0A" against a #171717
-// card) — the shared Input/Textarea primitives default to a transparent
-// background so they inherit whatever they're placed on, so this file
-// opts in explicitly wherever a field renders.
-const SUNKEN_INPUT_CLASS = "bg-background";
-
-// Free-text tag/chip input — add via Enter, remove via the x on each chip.
-// Same rounded-full chip look as ChipMultiSelect (publishing-schedule-
-// section.tsx) but for arbitrary user-typed values instead of toggling a
-// fixed option set, since fields like tone_descriptors have no fixed enum.
-function TagInput({
-  values,
-  onChange,
-  placeholder,
-}: {
-  values: string[];
-  onChange: (next: string[]) => void;
-  placeholder?: string;
-}) {
-  const [draft, setDraft] = useState("");
-
-  function commit() {
-    const trimmed = draft.trim();
-    if (trimmed && !values.includes(trimmed)) {
-      onChange([...values, trimmed]);
-    }
-    setDraft("");
-  }
-
-  return (
-    <div
-      className={cn(
-        "flex flex-wrap items-center gap-1.5 rounded-lg border border-input p-1.5",
-        SUNKEN_INPUT_CLASS,
-        values.length === 0 && EMPTY_FIELD_CLASS
-      )}
-    >
-      {values.map((value) => (
-        <span
-          key={value}
-          className="flex items-center gap-1 rounded-full bg-accent px-2.5 py-1 text-xs font-medium text-accent-foreground"
-        >
-          {value}
-          <button
-            type="button"
-            onClick={() => onChange(values.filter((v) => v !== value))}
-            aria-label={`Remove ${value}`}
-            className="text-muted-foreground hover:text-foreground"
-          >
-            <X className="h-3 w-3" />
-          </button>
-        </span>
-      ))}
-      <input
-        value={draft}
-        onChange={(e) => setDraft(e.target.value)}
-        onKeyDown={(e) => {
-          if (e.key === "Enter" || e.key === ",") {
-            e.preventDefault();
-            commit();
-          }
-        }}
-        onBlur={commit}
-        placeholder={values.length === 0 ? placeholder ?? EMPTY_PLACEHOLDER : "Add another..."}
-        className="min-w-24 flex-1 bg-transparent px-1.5 py-1 text-sm outline-none placeholder:text-muted-foreground"
-      />
-    </div>
-  );
-}
 
 function KeyStatsEditor({
   stats,
@@ -378,89 +272,6 @@ function ColorField({
   );
 }
 
-// One card per schema group, each independently collapsible — same chevron
-// + CSS grid-rows expand/collapse technique as the left sidebar's
-// NavGroupHeader/NavGroupContent (components/dashboard/AppSidebar.tsx).
-// Unlike the sidebar's version, this is a full bordered Card per section
-// (not a divider inside one shared card) with a leading icon, matching the
-// reference design's "one card per topic" layout.
-function SectionCard({
-  icon: Icon,
-  title,
-  description,
-  open,
-  onToggle,
-  children,
-}: {
-  icon: LucideIcon;
-  title: string;
-  description?: string;
-  open: boolean;
-  onToggle: () => void;
-  children: React.ReactNode;
-}) {
-  return (
-    <Card className="py-0">
-      <button
-        type="button"
-        onClick={onToggle}
-        aria-expanded={open}
-        className="flex w-full items-center justify-between gap-3 px-6 py-5 text-left"
-      >
-        <div className="flex items-center gap-3">
-          <Icon className="h-5 w-5 shrink-0 text-muted-foreground" />
-          <div>
-            <p className="font-heading text-base font-medium">{title}</p>
-            {description && <p className="text-xs text-muted-foreground">{description}</p>}
-          </div>
-        </div>
-        <ChevronDown
-          className={cn("h-4 w-4 shrink-0 text-muted-foreground transition-transform", !open && "-rotate-90")}
-        />
-      </button>
-      <div
-        className={cn(
-          "grid transition-[grid-template-rows] duration-200 ease-out",
-          open ? "grid-rows-[1fr]" : "grid-rows-[0fr]"
-        )}
-      >
-        <div className="overflow-hidden">
-          <div className="flex flex-col gap-4 border-t px-6 pt-4 pb-6">{children}</div>
-        </div>
-      </div>
-    </Card>
-  );
-}
-
-// The prominent failure banner shown when the last extraction attempt
-// errored — deliberately louder than the generic inline ErrorMessage used
-// for save/upload failures elsewhere in this file, since a failed
-// auto-analysis is the reason every field below is empty, not a small
-// transient mistake.
-function AutoAnalysisErrorBanner({ websiteUrl, message }: { websiteUrl: string | null; message: string }) {
-  return (
-    <div className="flex items-start gap-3 rounded-lg border border-destructive/40 bg-destructive/10 p-4">
-      <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-destructive" />
-      <div className="flex flex-col gap-1">
-        <p className="text-sm font-medium text-destructive">Auto-analysis failed</p>
-        <p className="text-sm text-muted-foreground">
-          {message}
-          {websiteUrl && (
-            <>
-              {" "}
-              <a href={websiteUrl} target="_blank" rel="noopener noreferrer" className="underline">
-                {websiteUrl}
-              </a>
-              .
-            </>
-          )}{" "}
-          Please fill in your brand details manually below.
-        </p>
-      </div>
-    </div>
-  );
-}
-
 // ---------------------------------------------------------------------------
 // Empty state — no brand_information row yet
 // ---------------------------------------------------------------------------
@@ -597,6 +408,7 @@ const EMPTY_FORM: FormState = {
   extraction_source: {},
   extraction_status: "idle",
   extraction_error: null,
+  pending_run_id: null,
   last_analyzed_at: null,
 };
 
@@ -839,19 +651,11 @@ export function BrandIdentitySection({
 
   if (row.extraction_status === "processing") {
     return (
-      <Card>
-        <CardHeader>
-          <CardTitle>Brand Identity</CardTitle>
-        </CardHeader>
-        <CardContent className="flex flex-col items-center gap-3 py-16 text-center">
-          <Loader2 className="size-6 animate-spin text-muted-foreground" />
-          <p className="text-sm text-muted-foreground">Analyzing your brand...</p>
-          <p className="max-w-sm text-xs text-muted-foreground">
-            Reading your homepage and any About/Pricing pages we can find. This
-            usually takes under a minute.
-          </p>
-        </CardContent>
-      </Card>
+      <ProcessingCard
+        title="Brand Identity"
+        description="Analyzing your brand — reading your homepage and any About/Pricing pages we can find. This usually takes under a minute."
+        onRefresh={() => router.refresh()}
+      />
     );
   }
 

@@ -252,7 +252,7 @@ export function AppOpportunitiesView({
   planTier,
   agentCreditsUsedThisWeek,
   agentCreditsResetAt,
-  lastAgentActionAt,
+  agentActionCooldowns,
   firstResearchCompleted,
   firstResearchCompletedAt,
   preferredResearchDay,
@@ -263,7 +263,7 @@ export function AppOpportunitiesView({
   planTier: PlanTier;
   agentCreditsUsedThisWeek: number;
   agentCreditsResetAt: string | null;
-  lastAgentActionAt: string | null;
+  agentActionCooldowns: Record<string, string> | null;
   firstResearchCompleted: boolean;
   firstResearchCompletedAt: string | null;
   preferredResearchDay: ResearchDay;
@@ -445,7 +445,7 @@ export function AppOpportunitiesView({
             planTier={planTier}
             agentCreditsUsedThisWeek={agentCreditsUsedThisWeek}
             agentCreditsResetAt={agentCreditsResetAt}
-            lastAgentActionAt={lastAgentActionAt}
+            agentActionCooldowns={agentActionCooldowns}
             firstRun={{ completed: firstResearchCompleted, completedAt: firstResearchCompletedAt }}
             nextRunAt={getNextResearchOccurrence(preferredResearchDay, preferredResearchHour)}
           />

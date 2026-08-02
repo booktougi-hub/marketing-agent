@@ -14,6 +14,7 @@ import {
   READ_ONLY_HANDLERS,
   describeToolProposal,
   isMutatingTool,
+  isProactiveOfferTool,
   type ChatToolContext,
 } from "@/lib/chat/tools";
 import { getRemainingCredits } from "@/lib/agentCredits";
@@ -22,6 +23,7 @@ import {
   type PendingActionRow,
   type PersistedMessageRow,
 } from "@/lib/chat/reconstruct-messages";
+import { planToolUseRepairs } from "@/lib/chat/repair-history";
 import { withErrorHandling } from "@/lib/errors/apiHandler";
 import { ErrorMessages } from "@/lib/errors/messages";
 import { callExternalService, ForbiddenError, NotFoundError, RateLimitError, UnauthorizedError, ValidationError } from "@/lib/errors/AppError";
@@ -185,41 +187,52 @@ export const POST = withErrorHandling(async (request: NextRequest) => {
 
   const { data: priorRows } = await supabaseAdmin
     .from("chat_messages")
-    .select("role, content")
+    .select("role, content, created_at")
     .eq("conversation_id", conversationId)
     .order("created_at", { ascending: true });
 
-  const priorMessages: Anthropic.MessageParam[] = (priorRows ?? []).map((row) => ({
-    role: row.role as "user" | "assistant",
-    content: row.content as Anthropic.MessageParam["content"],
-  }));
+  // Self-healing repair pass (lib/chat/repair-history.ts) — scans the
+  // ENTIRE history for any assistant tool_use block not immediately
+  // followed by a matching tool_result, and plans a fix for each gap found.
+  // See that file's header comment for the two confirmed real causes this
+  // guards against. Persisting the fix (not just patching this one call in
+  // memory) is what makes a conversation self-heal on its next message
+  // instead of staying permanently broken.
+  const repairPlan = planToolUseRepairs(
+    (priorRows ?? []).map((row) => ({
+      role: row.role as "user" | "assistant",
+      content: row.content as Anthropic.MessageParam["content"],
+      created_at: row.created_at,
+    }))
+  );
 
-  // If the conversation's last turn was a mutating-tool proposal that's
-  // still awaiting the user's confirm/decline (app/api/chat/confirm/route.ts
-  // only appends the real tool_result once that happens — see the
-  // "proposal mode" branch below), the persisted history ends with an
-  // assistant tool_use block and nothing after it. Synthesize an in-memory
-  // placeholder tool_result just for this call so the request stays
-  // structurally valid (every tool_use needs an eventual tool_result before
-  // the conversation can continue) — never persisted, so the real
-  // resolution still lands in chat_messages exactly once, from the confirm
-  // route.
-  const lastPrior = priorMessages[priorMessages.length - 1];
-  if (lastPrior?.role === "assistant" && Array.isArray(lastPrior.content)) {
-    const danglingToolUseIds = lastPrior.content
-      .filter((block): block is Anthropic.ToolUseBlock => block.type === "tool_use")
-      .map((block) => block.id);
-    if (danglingToolUseIds.length > 0) {
-      priorMessages.push({
-        role: "user",
-        content: danglingToolUseIds.map((id) => ({
-          type: "tool_result" as const,
-          tool_use_id: id,
-          content: "Not resolved in that turn — proceed with the new message below.",
-        })),
-      });
-    }
+  if (repairPlan.inserts.length > 0) {
+    await supabaseAdmin.from("chat_messages").insert(
+      repairPlan.inserts.map((insert) => ({
+        conversation_id: conversationId,
+        workspace_id: workspaceId,
+        role: "user" as const,
+        content: insert.content,
+        created_at: insert.created_at,
+      }))
+    );
   }
+
+  if (repairPlan.supersededToolUseIds.length > 0) {
+    // Anything still "pending" here was abandoned by the founder moving on
+    // to a different message rather than confirming/declining it — mark it
+    // cancelled so app/api/chat/confirm/route.ts safely rejects a stale
+    // confirm-tap on an old card (ACTION_NOT_PENDING) instead of trying to
+    // append a second, out-of-place tool_result for an id already resolved
+    // above.
+    await supabaseAdmin
+      .from("pending_chat_actions")
+      .update({ status: "cancelled" })
+      .in("tool_use_id", repairPlan.supersededToolUseIds)
+      .eq("status", "pending");
+  }
+
+  const priorMessages: Anthropic.MessageParam[] = repairPlan.repairedMessages;
 
   const identityBlock = await assembleIdentityBlock(appId, workspaceId);
 
@@ -240,70 +253,103 @@ export const POST = withErrorHandling(async (request: NextRequest) => {
 
   const rowsToPersist: PersistRow[] = [{ role: "user", content: [{ type: "text", text: message }] }];
 
-  const firstResponse = await callExternalService("claude", ErrorMessages.external.CLAUDE_FAILED, () =>
+  // Growing message list sent on every call in this turn's loop below — the
+  // same array instance is mutated (pushed to) as read-only rounds run, so
+  // each subsequent call replays the full in-progress turn.
+  const conversationForApi: Anthropic.MessageParam[] = [...priorMessages, { role: "user", content: message }];
+
+  let currentResponse = await callExternalService("claude", ErrorMessages.external.CLAUDE_FAILED, () =>
     anthropic.messages.create({
       model: CLAUDE_MODEL,
       max_tokens: MAX_TOKENS,
       thinking: { type: "disabled" },
       system,
       tools: CLAUDE_TOOL_DEFINITIONS,
-      messages: [...priorMessages, { role: "user", content: message }],
+      messages: conversationForApi,
     })
   );
-  rowsToPersist[0].usage = firstResponse.usage;
+  rowsToPersist[0].usage = currentResponse.usage;
 
-  const toolUseBlocks = firstResponse.content.filter(
-    (block): block is Anthropic.ToolUseBlock => block.type === "tool_use"
-  );
+  // A read-only turn isn't always resolved in a single follow-up call — the
+  // model can legitimately chain more than one read-only tool (e.g. check
+  // SEO status, then check credit balance for context) inside what still
+  // reads as "one turn" to the user. Capped rather than unbounded so a
+  // single turn can't run away on latency/cost; the final round below
+  // always omits `tools` so it's structurally impossible for that last call
+  // to return yet another unresolved tool_use — every prior version of this
+  // loop assumed exactly one follow-up and persisted whatever it got back
+  // verbatim, which let a second tool_use slip into chat_messages with no
+  // tool_result after it. Anthropic requires a tool_result immediately
+  // after every tool_use, so once that happens the ENTIRE conversation
+  // 400s on every future turn (the full history is replayed each time) —
+  // this is what "every query fails" for an existing conversation traces
+  // back to.
+  const MAX_READ_ONLY_ROUNDS = 4;
+  let readOnlyRound = 0;
 
   let replyMessage: ChatMessage;
 
-  if (toolUseBlocks.length === 0 || firstResponse.stop_reason !== "tool_use") {
-    // Plain text answer — this also covers an off-topic redirect, which the
-    // coordinator produces as ordinary text per SCOPED_SYSTEM_PROMPT, marked
-    // with a leading DECLINE_MARKER token so this code can tell the two
-    // apart without a second classification call (see that constant's
-    // comment in lib/chat/system-prompt.ts). The rare refusal stop_reason
-    // also lands here.
-    const text = firstResponse.content
-      .filter((block): block is Anthropic.TextBlock => block.type === "text")
-      .map((block) => block.text)
-      .join("\n")
-      .trim();
+  while (true) {
+    const toolUseBlocks = currentResponse.content.filter(
+      (block): block is Anthropic.ToolUseBlock => block.type === "tool_use"
+    );
 
-    const isDecline = text.startsWith(DECLINE_MARKER);
-    const displayText = isDecline ? text.slice(DECLINE_MARKER.length).trim() : text;
+    if (toolUseBlocks.length === 0 || currentResponse.stop_reason !== "tool_use") {
+      // Plain text answer — this also covers an off-topic redirect, which the
+      // coordinator produces as ordinary text per SCOPED_SYSTEM_PROMPT, marked
+      // with a leading DECLINE_MARKER token so this code can tell the two
+      // apart without a second classification call (see that constant's
+      // comment in lib/chat/system-prompt.ts). The rare refusal stop_reason
+      // also lands here.
+      const text = currentResponse.content
+        .filter((block): block is Anthropic.TextBlock => block.type === "text")
+        .map((block) => block.text)
+        .join("\n")
+        .trim();
 
-    // The marker must never reach a persisted row — chat_messages.content is
-    // replayed verbatim on reload (see reconstructChatMessages) and fed back
-    // to Claude as conversation history on the next turn, so it's stripped
-    // here too, not just from the live replyMessage below.
-    const persistedContent = isDecline
-      ? firstResponse.content.map((block) =>
-          block.type === "text" && block.text.trim().startsWith(DECLINE_MARKER)
-            ? { ...block, text: block.text.trim().slice(DECLINE_MARKER.length).trim() }
-            : block
-        )
-      : firstResponse.content;
+      const isDecline = text.startsWith(DECLINE_MARKER);
+      const displayText = isDecline ? text.slice(DECLINE_MARKER.length).trim() : text;
 
-    if (isDecline) {
-      await supabaseAdmin.from("chat_declines").insert({
-        conversation_id: conversationId,
-        app_id: appId,
-        workspace_id: workspaceId,
-        user_message: message,
+      // The marker must never reach a persisted row — chat_messages.content is
+      // replayed verbatim on reload (see reconstructChatMessages) and fed back
+      // to Claude as conversation history on the next turn, so it's stripped
+      // here too, not just from the live replyMessage below.
+      const persistedContent = isDecline
+        ? currentResponse.content.map((block) =>
+            block.type === "text" && block.text.trim().startsWith(DECLINE_MARKER)
+              ? { ...block, text: block.text.trim().slice(DECLINE_MARKER.length).trim() }
+              : block
+          )
+        : currentResponse.content;
+
+      if (isDecline) {
+        await supabaseAdmin.from("chat_declines").insert({
+          conversation_id: conversationId,
+          app_id: appId,
+          workspace_id: workspaceId,
+          user_message: message,
+        });
+      }
+
+      replyMessage = {
+        id: randomUUID(),
+        role: "assistant",
+        kind: "text",
+        content: displayText || "Sorry, I couldn't come up with an answer for that.",
+        createdAt: new Date().toISOString(),
+      };
+      // The very first call's usage already landed on rowsToPersist[0] (the
+      // user row) above — only attach it here too when at least one
+      // read-only round happened first, i.e. this text answer came from a
+      // follow-up call, not the first one.
+      rowsToPersist.push({
+        role: "assistant",
+        content: persistedContent,
+        ...(readOnlyRound > 0 ? { usage: currentResponse.usage } : {}),
       });
+      break;
     }
 
-    replyMessage = {
-      id: randomUUID(),
-      role: "assistant",
-      kind: "text",
-      content: displayText || "Sorry, I couldn't come up with an answer for that.",
-      createdAt: new Date().toISOString(),
-    };
-    rowsToPersist.push({ role: "assistant", content: persistedContent });
-  } else {
     const mutatingBlock = toolUseBlocks.find((block) => isMutatingTool(block.name));
 
     if (mutatingBlock) {
@@ -346,7 +392,7 @@ export const POST = withErrorHandling(async (request: NextRequest) => {
         content: "Not run — only one pending action can be proposed at a time.",
       }));
 
-      rowsToPersist.push({ role: "assistant", content: firstResponse.content });
+      rowsToPersist.push({ role: "assistant", content: currentResponse.content });
 
       if (!affordable) {
         syntheticResults.push({
@@ -396,8 +442,23 @@ export const POST = withErrorHandling(async (request: NextRequest) => {
           throw new ForbiddenError(ErrorMessages.generic.UNKNOWN, "PENDING_ACTION_CREATE_FAILED");
         }
 
+        // Logged only for the small allowlist of "proactive offer" tools
+        // (today just add_content_to_plan) — see chat_action_suggestions in
+        // SCHEMA.md. Every other mutating tool is founder-requested, not
+        // unprompted, so it doesn't belong in this log.
+        if (isProactiveOfferTool(mutatingBlock.name)) {
+          await supabaseAdmin.from("chat_action_suggestions").insert({
+            conversation_id: conversationId,
+            app_id: appId,
+            workspace_id: workspaceId,
+            pending_action_id: pending.id,
+            tool_name: mutatingBlock.name,
+            status: "offered",
+          });
+        }
+
         const copy = describeToolProposal(mutatingBlock.name, input);
-        const introText = firstResponse.content
+        const introText = currentResponse.content
           .filter((block): block is Anthropic.TextBlock => block.type === "text")
           .map((block) => block.text)
           .join("\n")
@@ -419,67 +480,58 @@ export const POST = withErrorHandling(async (request: NextRequest) => {
           createdAt: new Date().toISOString(),
         };
       }
-    } else {
-      // Every block is read-only — execute all of them, then make exactly
-      // one follow-up call (same cached prefix) to get the final answer.
-      const results = await Promise.all(
-        toolUseBlocks.map(async (block) => {
-          const handler = READ_ONLY_HANDLERS[block.name];
-          if (!handler) {
-            return {
-              type: "tool_result" as const,
-              tool_use_id: block.id,
-              content: `Unknown tool: ${block.name}`,
-              is_error: true,
-            };
-          }
-          try {
-            const data = await handler((block.input ?? {}) as Record<string, unknown>, toolCtx);
-            return {
-              type: "tool_result" as const,
-              tool_use_id: block.id,
-              content: JSON.stringify(data),
-            };
-          } catch {
-            return {
-              type: "tool_result" as const,
-              tool_use_id: block.id,
-              content: "This tool failed to run.",
-              is_error: true,
-            };
-          }
-        })
-      );
-
-      rowsToPersist.push({ role: "assistant", content: firstResponse.content });
-      rowsToPersist.push({ role: "user", content: results });
-
-      const followUp = await callExternalService("claude", ErrorMessages.external.CLAUDE_FAILED, () =>
-        anthropic.messages.create({
-          model: CLAUDE_MODEL,
-          max_tokens: MAX_TOKENS,
-          thinking: { type: "disabled" },
-          system,
-          tools: CLAUDE_TOOL_DEFINITIONS,
-          messages: [...priorMessages, { role: "user", content: message }, { role: "assistant", content: firstResponse.content }, { role: "user", content: results }],
-        })
-      );
-
-      const text = followUp.content
-        .filter((block): block is Anthropic.TextBlock => block.type === "text")
-        .map((block) => block.text)
-        .join("\n")
-        .trim();
-
-      replyMessage = {
-        id: randomUUID(),
-        role: "assistant",
-        kind: "text",
-        content: text || "Sorry, I couldn't come up with an answer for that.",
-        createdAt: new Date().toISOString(),
-      };
-      rowsToPersist.push({ role: "assistant", content: followUp.content, usage: followUp.usage });
+      break;
     }
+
+    // Every block is read-only — execute all of them, persist this round,
+    // then loop back with the result appended so the next call can either
+    // answer in text or chain another read-only tool.
+    const results = await Promise.all(
+      toolUseBlocks.map(async (block) => {
+        const handler = READ_ONLY_HANDLERS[block.name];
+        if (!handler) {
+          return {
+            type: "tool_result" as const,
+            tool_use_id: block.id,
+            content: `Unknown tool: ${block.name}`,
+            is_error: true,
+          };
+        }
+        try {
+          const data = await handler((block.input ?? {}) as Record<string, unknown>, toolCtx);
+          return {
+            type: "tool_result" as const,
+            tool_use_id: block.id,
+            content: JSON.stringify(data),
+          };
+        } catch {
+          return {
+            type: "tool_result" as const,
+            tool_use_id: block.id,
+            content: "This tool failed to run.",
+            is_error: true,
+          };
+        }
+      })
+    );
+
+    rowsToPersist.push({ role: "assistant", content: currentResponse.content });
+    rowsToPersist.push({ role: "user", content: results });
+    conversationForApi.push({ role: "assistant", content: currentResponse.content }, { role: "user", content: results });
+
+    readOnlyRound += 1;
+    const offerTools = readOnlyRound < MAX_READ_ONLY_ROUNDS;
+
+    currentResponse = await callExternalService("claude", ErrorMessages.external.CLAUDE_FAILED, () =>
+      anthropic.messages.create({
+        model: CLAUDE_MODEL,
+        max_tokens: MAX_TOKENS,
+        thinking: { type: "disabled" },
+        system,
+        ...(offerTools ? { tools: CLAUDE_TOOL_DEFINITIONS } : {}),
+        messages: conversationForApi,
+      })
+    );
   }
 
   // Explicit, strictly-increasing created_at per row: a single batch insert

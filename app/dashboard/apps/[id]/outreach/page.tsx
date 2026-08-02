@@ -30,7 +30,7 @@ export default async function AppOutreachPage({
       supabaseAdmin
         .from("apps")
         .select(
-          "id, name, source_url, agent_credits_used_this_week, agent_credits_reset_at, last_agent_action_at, icp_data, icp_status, first_outreach_completed"
+          "id, name, source_url, agent_credits_used_this_week, agent_credits_reset_at, agent_action_cooldowns, icp_data, icp_status, first_outreach_completed"
         )
         .eq("id", id)
         .eq("workspace_id", workspaceId)
@@ -73,7 +73,7 @@ export default async function AppOutreachPage({
         planTier={(workspace?.plan_tier ?? "free") as PlanTier}
         agentCreditsUsedThisWeek={app.agent_credits_used_this_week}
         agentCreditsResetAt={app.agent_credits_reset_at}
-        lastAgentActionAt={app.last_agent_action_at}
+        agentActionCooldowns={app.agent_action_cooldowns}
         initialIcpData={app.icp_data as IcpData | null}
         initialIcpStatus={app.icp_status as IcpStatus}
         firstOutreachCompleted={app.first_outreach_completed}

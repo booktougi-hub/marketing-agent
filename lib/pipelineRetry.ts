@@ -1,13 +1,26 @@
 import "server-only";
-import { tasks } from "@trigger.dev/sdk";
+import { runs, tasks } from "@trigger.dev/sdk";
 import { supabaseAdmin } from "@/lib/supabase-server";
 import { appRunTag } from "@/lib/jobHealthRegistry";
 import { ErrorMessages } from "@/lib/errors/messages";
 import { InternalError, ValidationError } from "@/lib/errors/AppError";
+import { NEVER_RAN_STATUSES } from "@/lib/triggerRunStatus";
+import type { AppStatus } from "@/types";
 import type { dnaExtraction } from "@/trigger/dna-extraction";
 import type { competitorResearch } from "@/trigger/competitor-research";
 import type { strategyGeneration } from "@/trigger/strategy-generation";
 import type { contentGeneration } from "@/trigger/content-generation";
+
+// Every in-progress pipeline status — mirrors app-content-gate.tsx's
+// LOADING_STATUSES, duplicated rather than imported since that's a client
+// component constant and this is a server-only module.
+const LOADING_STATUSES = new Set<AppStatus>([
+  "pending",
+  "extracting",
+  "competitor_research_pending",
+  "diagnosis_pending",
+  "strategy_pending",
+]);
 
 export type PipelineRetryStage =
   | "dna-extraction"
@@ -64,13 +77,44 @@ export async function retryPipeline(
 ): Promise<{ stage: PipelineRetryStage }> {
   const { data: app } = await supabaseAdmin
     .from("apps")
-    .select("id, status, source_url, additional_context, doc_paths, dna, diagnosis")
+    .select("id, status, pending_run_id, source_url, additional_context, doc_paths, dna, diagnosis")
     .eq("id", appId)
     .eq("workspace_id", workspaceId)
     .single();
 
-  if (!app || app.status !== "error") {
+  if (!app) {
     throw new ValidationError(ErrorMessages.apps.NOT_IN_ERROR_STATE, "NOT_IN_ERROR_STATE");
+  }
+
+  // A founder clicking Retry while the app is still in a genuine
+  // in-progress status (not yet 'error') is only valid if the run we're
+  // actually tracking has already died — checked here directly against
+  // Trigger.dev rather than trusting trigger/job-watchdog.ts to have
+  // already flagged it, since that cron only runs if a worker happens to
+  // be online (see that file's own comment) and shouldn't be a single
+  // point of failure for recovering a stuck app.
+  if (app.status !== "error") {
+    const stillGenuinelyRunning = new ValidationError(
+      ErrorMessages.apps.NOT_IN_ERROR_STATE,
+      "NOT_IN_ERROR_STATE"
+    );
+
+    if (!LOADING_STATUSES.has(app.status as AppStatus) || !app.pending_run_id) {
+      throw stillGenuinelyRunning;
+    }
+
+    try {
+      const run = await runs.retrieve(app.pending_run_id);
+      if (!NEVER_RAN_STATUSES.has(run.status)) {
+        throw stillGenuinelyRunning;
+      }
+    } catch (err) {
+      if (err instanceof ValidationError) throw err;
+      // A lookup failure against Trigger.dev's API is not evidence the run
+      // itself died — fail safe by treating the app as still running rather
+      // than letting a transient API error trigger a duplicate pipeline run.
+      throw stillGenuinelyRunning;
+    }
   }
 
   const { count: activeStrategyCount } = await supabaseAdmin

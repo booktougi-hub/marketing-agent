@@ -1,18 +1,13 @@
 import { logger, schemaTask, tasks } from "@trigger.dev/sdk";
-import mammoth from "mammoth";
-import { PDFParse } from "pdf-parse";
 import { z } from "zod";
 import { supabaseAdmin } from "@/lib/supabase-server";
 import { resolveAppIconUrl } from "@/lib/favicon";
 import { handleJobError } from "@/lib/errors/jobErrorHandler";
-import { callExternalService, ExternalServiceError } from "@/lib/errors/AppError";
-import { ErrorMessages } from "@/lib/errors/messages";
-import { createAnthropicClient } from "@/lib/anthropic-client";
 import { createFirecrawlClient, SCRAPE_TIMEOUT_MS } from "@/lib/firecrawl-client";
-import { MODELS } from "@/lib/ai/models";
+import { runDnaExtraction } from "@/lib/dna-extraction-core";
+import { extractDocTexts } from "@/lib/supporting-docs";
 import type { competitorResearch } from "@/trigger/competitor-research";
-
-const CLAUDE_MODEL: string = MODELS.STANDARD;
+import type { DnaExtractionSource } from "@/types";
 
 const payloadSchema = z.object({
   app_id: z.string(),
@@ -21,91 +16,6 @@ const payloadSchema = z.object({
   has_additional_context: z.boolean(),
   has_docs: z.boolean(),
 });
-
-const dnaSchema = z.object({
-  name: z.string(),
-  tagline: z.string(),
-  problem: z.string(),
-  features: z.array(z.string()),
-  target_audience: z.string(),
-  pricing: z.string(),
-  competitors: z.array(z.string()),
-  tone: z.enum(["casual", "professional", "technical"]),
-  additional_urls: z.array(z.string()),
-  app_store_urls: z.object({
-    play_store: z.string().nullable(),
-    app_store: z.string().nullable(),
-  }),
-});
-
-const SYSTEM_PROMPT = `You are extracting a structured "DNA" profile for a software product from raw source material.
-
-You may receive content from multiple sources: the app website, additional context provided by the developer, and supporting documents. Use all sources together to extract the most accurate and complete information.
-
-Many sites are landing/marketing pages whose actual product is a mobile app — look for "Get it on Google Play" / "Download on the App Store" badges or links to play.google.com or apps.apple.com anywhere in the content, even if the page otherwise reads like a normal website. This matters regardless of what the developer may have labeled the product as — a page can be a mobile app's marketing site even when nothing else about it looks like one.
-
-Respond with ONLY a JSON object matching this exact shape — no prose, no markdown code fences:
-{
-  "name": string,
-  "tagline": string,
-  "problem": string,
-  "features": string[],
-  "target_audience": string,
-  "pricing": string,
-  "competitors": string[],
-  "tone": "casual" | "professional" | "technical",
-  "additional_urls": string[],
-  "app_store_urls": { "play_store": string | null, "app_store": string | null }  // the actual URLs found in the content, or null if that store isn't linked — never invent a URL that isn't present in the source material
-}`;
-
-function getExtension(path: string) {
-  return path.split(".").pop()?.toLowerCase() ?? "";
-}
-
-async function extractDocText(path: string): Promise<string | null> {
-  const { data, error } = await supabaseAdmin.storage
-    .from("app-docs")
-    .download(path);
-
-  if (error || !data) {
-    logger.error("Failed to download supporting document", {
-      path,
-      error: error?.message,
-    });
-    return null;
-  }
-
-  const extension = getExtension(path);
-
-  try {
-    if (extension === "pdf") {
-      const buffer = Buffer.from(await data.arrayBuffer());
-      const parser = new PDFParse({ data: buffer });
-      const result = await parser.getText();
-      await parser.destroy();
-      return result.text;
-    }
-
-    if (extension === "docx") {
-      const buffer = Buffer.from(await data.arrayBuffer());
-      const result = await mammoth.extractRawText({ buffer });
-      return result.value;
-    }
-
-    if (extension === "txt" || extension === "md") {
-      return await data.text();
-    }
-
-    logger.warn("Unsupported document type, skipping", { path, extension });
-    return null;
-  } catch (err) {
-    logger.error("Failed to extract text from document", {
-      path,
-      error: err instanceof Error ? err.message : String(err),
-    });
-    return null;
-  }
-}
 
 export const dnaExtraction = schemaTask({
   id: "dna-extraction",
@@ -117,12 +27,11 @@ export const dnaExtraction = schemaTask({
 
     try {
       const firecrawl = createFirecrawlClient();
-      const anthropic = createAnthropicClient();
 
       let scrapedMarkdown = "";
       let iconUrl: string | null = null;
       let screenshotUrl: string | null = null;
-      logger.info("dna-extraction: scraping URL", { source_url });
+      logger.info("dna-extraction: scraping homepage", { source_url });
       try {
         const scraped = await firecrawl.scrapeUrl(source_url, {
           // "html" is Firecrawl's cleaned main-content extraction — it
@@ -131,7 +40,10 @@ export const dnaExtraction = schemaTask({
           // icon resolution below actually needs. "screenshot" (viewport
           // only, not "screenshot@fullPage") piggybacks on this same
           // request for Settings > App Identity's live-preview box — no
-          // extra Firecrawl call.
+          // extra Firecrawl call. Secondary pages (features/pricing/docs/
+          // about) are discovered and scraped separately inside
+          // runDnaExtraction, markdown-only — they have no reason to
+          // duplicate rawHtml/screenshot capture.
           formats: ["markdown", "rawHtml", "screenshot"],
           timeout: SCRAPE_TIMEOUT_MS,
         });
@@ -141,7 +53,7 @@ export const dnaExtraction = schemaTask({
         if ("screenshot" in scraped && scraped.screenshot) {
           screenshotUrl = scraped.screenshot;
         }
-        logger.info("dna-extraction: scrape finished", {
+        logger.info("dna-extraction: homepage scrape finished", {
           got_markdown: !!scrapedMarkdown,
           markdown_length: scrapedMarkdown.length,
           got_screenshot: !!screenshotUrl,
@@ -163,7 +75,7 @@ export const dnaExtraction = schemaTask({
           });
         }
       } catch (err) {
-        logger.warn("dna-extraction: Firecrawl scrape failed, continuing with other sources", {
+        logger.warn("dna-extraction: Firecrawl homepage scrape failed, continuing with other sources", {
           source_url,
           error: err instanceof Error ? err.message : String(err),
         });
@@ -187,92 +99,52 @@ export const dnaExtraction = schemaTask({
 
       // Step 2B — extract text from uploaded documents
       const docPaths: string[] = appRow.doc_paths ?? [];
-      const docTexts: string[] = [];
-
       logger.info("dna-extraction: extracting supporting documents", {
         doc_count: docPaths.length,
       });
-      for (const path of docPaths) {
-        const text = await extractDocText(path);
-        if (text?.trim()) {
-          docTexts.push(text.trim());
-        }
-      }
+      const docTexts = await extractDocTexts(docPaths);
       logger.info("dna-extraction: document extraction finished", {
         extracted_count: docTexts.length,
       });
 
-      if (!scrapedMarkdown && !additionalContext && docTexts.length === 0) {
-        throw new Error(
-          "No content available to extract DNA from (scrape, context, and docs all empty)."
-        );
-      }
-
-      // Step 2C — combined context block
-      const combinedContext = `
-=== APP WEBSITE CONTENT ===
-${scrapedMarkdown}
-
-${additionalContext ? `=== ADDITIONAL CONTEXT PROVIDED BY DEVELOPER ===\n${additionalContext}` : ""}
-
-${docTexts.length > 0 ? `=== SUPPORTING DOCUMENTS ===\n${docTexts.map((text, i) => `Document ${i + 1}:\n${text}`).join("\n\n")}` : ""}
-`.trim();
-
       logger.info(
-        `DNA extraction used: website scrape ${scrapedMarkdown ? "yes" : "no"} + additional context ${additionalContext ? "yes" : "no"} + ${docTexts.length} documents`
+        `DNA extraction used: homepage scrape ${scrapedMarkdown ? "yes" : "no"} + additional context ${additionalContext ? "yes" : "no"} + ${docTexts.length} documents`
       );
 
-      logger.info("dna-extraction: calling Claude", {
-        model: CLAUDE_MODEL,
-        context_length: combinedContext.length,
+      const { dna, secondaryPageCount } = await runDnaExtraction({
+        appId: app_id,
+        workspaceId: workspace_id,
+        sourceUrl: source_url,
+        homepageMarkdown: scrapedMarkdown,
+        additionalContext,
+        docTexts,
+        jobName: "dna-extraction",
       });
-      const message = await callExternalService("claude", ErrorMessages.external.CLAUDE_FAILED, () =>
-        anthropic.messages.create({
-          model: CLAUDE_MODEL,
-          max_tokens: 2048,
-          system: SYSTEM_PROMPT,
-          messages: [
-            {
-              role: "user",
-              content: `Extract the app DNA from the following content:\n\n${combinedContext}`,
-            },
-          ],
-        })
+
+      logger.info("dna-extraction: DNA parsed successfully", {
+        name: dna.name,
+        secondary_page_count: secondaryPageCount,
+      });
+
+      // A full pipeline run (initial onboarding, or Settings > App
+      // Identity's "Re-analyse App") is a deliberate full restart — every
+      // field it produces is fresh and marked "auto", which does mean any
+      // manual edit made on the Product Information page is overwritten
+      // here. That's expected for this specific action (it also pauses the
+      // app and supersedes the active strategy — see
+      // app/api/apps/[id]/reanalyse/route.ts); only the narrower
+      // trigger/dna-reextraction.ts (Product Information page's own
+      // "Re-analyze") respects per-field manual edits.
+      const dnaExtractionSource: DnaExtractionSource = Object.fromEntries(
+        Object.keys(dna).map((key) => [key, "auto" as const])
       );
-      logger.info("dna-extraction: Claude call finished", {
-        stop_reason: message.stop_reason,
-        usage: message.usage,
-      });
-
-      let responseText = "";
-      for (const block of message.content) {
-        if (block.type === "text") {
-          responseText += block.text;
-        }
-      }
-      responseText = responseText
-        .trim()
-        .replace(/^```(?:json)?\s*/i, "")
-        .replace(/```\s*$/i, "");
-
-      let dna: z.infer<typeof dnaSchema>;
-      try {
-        dna = dnaSchema.parse(JSON.parse(responseText));
-      } catch (err) {
-        logger.error("dna-extraction: failed to parse Claude's response", {
-          raw_response: responseText.slice(0, 2000),
-          error: err instanceof Error ? err.message : String(err),
-        });
-        throw new ExternalServiceError(ErrorMessages.external.CLAUDE_FAILED, "claude");
-      }
-
-      logger.info("dna-extraction: DNA parsed successfully", { name: dna.name });
 
       await supabaseAdmin
         .from("apps")
         .update({
           name: dna.name,
           dna,
+          dna_extraction_source: dnaExtractionSource,
           status: "competitor_research_pending",
           // Only overwrite icon_url/screenshot_url when a new one was
           // actually found this run — a transient resolution/scrape

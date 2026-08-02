@@ -2,7 +2,31 @@
 // from-research route and the bulk content-generation job) so both produce
 // the same structure and writing quality instead of drifting apart. Only
 // the user-prompt (what the article is actually about) differs per caller —
-// the system prompt built here is identical either way.
+// the system prompt built here is identical either way. Also hosts
+// buildBrandVoiceBlock() below, shared with trigger/content-generation.ts's
+// short-form (Twitter/LinkedIn) path for the same reason — one block
+// builder, not two copies that could drift.
+
+// CRAFT_PRINCIPLES below: reasoning framework swapped for
+// .claude/skills/content-strategy/SKILL.md + .claude/skills/copywriting/
+// SKILL.md + .claude/skills/copy-editing/SKILL.md + .claude/skills/
+// marketing-psychology/SKILL.md combined — same "compress the skill's
+// framework into a numbered list baked into a static prompt" pattern the
+// four Audits-family jobs use (trigger/pricing-audit.ts:79 etc.), applied
+// here to the long-form article path specifically because it already runs
+// on Sonnet (MODELS.STANDARD) and has room for a fuller instruction set
+// without meaningfully changing cost — trigger/content-generation.ts's
+// short-form path gets a deliberately condensed version of the same four
+// skills instead, since that path is pinned to a free bulk model kept
+// cheap and fast on purpose.
+const CRAFT_PRINCIPLES = `=== CRAFT PRINCIPLES (apply this reasoning, do not just restate it) ===
+
+1. SEARCHABLE OR SHAREABLE — every section should either answer a real question directly, or contain a genuinely novel insight, counterintuitive take, or piece of original data worth sharing on its own. A section that does neither is filler.
+2. SPECIFICITY OVER VAGUENESS — a concrete number, named mechanism, or real detail from the reference material beats an abstract claim every time ("cuts weekly reporting from 4 hours to 15 minutes," not "saves time"). Never write "streamline," "optimize," "innovative," or "leverage" without a concrete detail attached.
+3. BENEFITS OVER FEATURES (JOBS TO BE DONE) — readers don't want a feature, they want the outcome it produces. For every feature mentioned, answer "so what?" — bridge it to the actual outcome with a "which means..." connector, don't just list the feature and move on.
+4. PROVE IT — every non-obvious claim needs evidence: a real number, a named source, a specific example from the reference material. An unsupported claim ("the best way to...") reads as filler; cut it or ground it in something real.
+5. ANCHORING & FRAMING — when comparing before/after, a problem/solution, or two options, put the less-favorable one first so the better one reads as the obvious improvement, not the other way around.
+6. ZERO RISK NEAR THE CTA — the closing call to action should remove friction, not manufacture urgency it hasn't earned — name the product, name the specific next step, no vague "learn more."`;
 
 export const DEVTO_QUALITY_INSTRUCTIONS = `CRITICAL WRITING QUALITY:
 - Vary sentence length deliberately — mix short, punchy sentences with longer explanatory ones.
@@ -32,9 +56,34 @@ export function buildDevtoSystemPrompt({
 
 ${buildDevtoStructureInstructions(includeComparisonTable)}
 
+${CRAFT_PRINCIPLES}
+
 ${DEVTO_QUALITY_INSTRUCTIONS}
 ${tone ? `\nTone: ${tone}\n` : ""}
+If a "=== BRAND VOICE ===" section appears in the reference material you're given, it always overrides the craft principles above whenever they conflict — a founder's specific stated tone and words-to-avoid win over this general guidance every time. The craft principles are the default; brand voice is the override.
+
 Respond with ONLY the article in Markdown — no prose about what you're doing, no code fences wrapping the whole thing.`;
+}
+
+// Shared by both content-generation.ts paths (short-form contextBlock and
+// this file's own buildDevtoUserPrompt below) — one formatter, so the
+// "=== BRAND VOICE ===" heading both system prompts above reference by name
+// can never drift out of sync between the two paths. Returns "" when there's
+// nothing to show (no brand_information row yet, or one with neither field
+// populated) rather than an empty/misleading heading.
+export function buildBrandVoiceBlock(
+  brandVoice: { tone_descriptors: string[] | null; words_to_avoid: string[] | null } | null
+): string {
+  if (!brandVoice) return "";
+  const lines: string[] = [];
+  if (brandVoice.tone_descriptors && brandVoice.tone_descriptors.length > 0) {
+    lines.push(`Voice: ${brandVoice.tone_descriptors.join(", ")}`);
+  }
+  if (brandVoice.words_to_avoid && brandVoice.words_to_avoid.length > 0) {
+    lines.push(`Never use these words or phrases: ${brandVoice.words_to_avoid.join(", ")}`);
+  }
+  if (lines.length === 0) return "";
+  return `=== BRAND VOICE (set by the founder — overrides general craft/style guidance whenever they conflict) ===\n${lines.join("\n")}`;
 }
 
 // Every real URL a caller is allowed to hand to the model as link material —

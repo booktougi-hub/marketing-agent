@@ -144,6 +144,18 @@ export const ErrorMessages = {
     INVALID_FILE_TYPE: "Unsupported file type. Please upload a PNG, JPEG, WebP, or SVG image.",
     TOO_MANY_SCREENSHOTS: "Maximum of 6 screenshots.",
   },
+  dnaInformation: {
+    NOT_YET_ANALYZED: "Run the initial analysis for this app before re-analyzing.",
+    ALREADY_IN_PROGRESS: "Product information analysis is already running for this app.",
+    TRIGGER_FAILED: "Failed to start product information analysis.",
+    NOT_FOUND: "No product information found for this app.",
+    UPDATE_FAILED: "Failed to save changes.",
+  },
+  competitorProfile: {
+    NOT_YET_ANALYZED: "Run the initial product information analysis for this app before researching competitors.",
+    ALREADY_IN_PROGRESS: "Competitor research is already running for this app.",
+    TRIGGER_FAILED: "Failed to start competitor research.",
+  },
   platforms: {
     NOT_CONFIGURED: "Server is not configured to store credentials.",
     SAVE_FAILED: "Failed to save connection.",

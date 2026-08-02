@@ -8,7 +8,7 @@ import type { AppDna } from "@/types";
 // belongs behind a read-only tool (get_seo_geo_status, get_credit_balance,
 // ...) so it's fetched only when the model actually asks for it, instead of
 // bloating and invalidating the cached prefix on every turn. See
-// lib/chat/tools.ts and SKILL.md's prompt-caching guidance.
+// lib/chat/tools.ts.
 export async function assembleIdentityBlock(appId: string, workspaceId: string): Promise<string> {
   const [{ data: app }, { data: brand }] = await Promise.all([
     supabaseAdmin

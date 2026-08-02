@@ -90,12 +90,12 @@ export function SeoFindingCard({
   );
 }
 
-function DemoSeoPreview({ appId, planTier, agentCreditsUsedThisWeek, agentCreditsResetAt, lastAgentActionAt, nextAuditRun }: {
+function DemoSeoPreview({ appId, planTier, agentCreditsUsedThisWeek, agentCreditsResetAt, agentActionCooldowns, nextAuditRun }: {
   appId: string;
   planTier: PlanTier;
   agentCreditsUsedThisWeek: number;
   agentCreditsResetAt: string | null;
-  lastAgentActionAt: string | null;
+  agentActionCooldowns: Record<string, string> | null;
   nextAuditRun: Date;
 }) {
   const [demoFindings, setDemoFindings] = useState(DEMO_SEO_FINDINGS);
@@ -131,7 +131,7 @@ function DemoSeoPreview({ appId, planTier, agentCreditsUsedThisWeek, agentCredit
         planTier={planTier}
         agentCreditsUsedThisWeek={agentCreditsUsedThisWeek}
         agentCreditsResetAt={agentCreditsResetAt}
-        lastAgentActionAt={lastAgentActionAt}
+        agentActionCooldowns={agentActionCooldowns}
         nextRunAt={nextAuditRun}
       />
     </div>
@@ -145,7 +145,7 @@ export function AppSeoView({
   planTier,
   agentCreditsUsedThisWeek,
   agentCreditsResetAt,
-  lastAgentActionAt,
+  agentActionCooldowns,
 }: {
   appId: string;
   initialFindings: SeoGeoFinding[];
@@ -153,7 +153,7 @@ export function AppSeoView({
   planTier: PlanTier;
   agentCreditsUsedThisWeek: number;
   agentCreditsResetAt: string | null;
-  lastAgentActionAt: string | null;
+  agentActionCooldowns: Record<string, string> | null;
 }) {
   const [findings, setFindings] = useState(initialFindings);
 
@@ -210,7 +210,7 @@ export function AppSeoView({
         planTier={planTier}
         agentCreditsUsedThisWeek={agentCreditsUsedThisWeek}
         agentCreditsResetAt={agentCreditsResetAt}
-        lastAgentActionAt={lastAgentActionAt}
+        agentActionCooldowns={agentActionCooldowns}
         nextAuditRun={nextAuditRun}
       />
     );

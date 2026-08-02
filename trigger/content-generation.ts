@@ -1,22 +1,28 @@
-// TODO(brand-identity): once brand_information (SCHEMA.md) is populated for
-// an app, pull its key_stats, tone_descriptors, and words_to_avoid into the
-// system prompts below — key_stats gives the LLM real, non-fabricated proof
-// points to cite, tone_descriptors sharpens voice matching beyond the DNA's
-// single `tone` enum, and words_to_avoid is a hard exclusion list the prompt
-// should never violate. Not wired in yet — extraction + Settings UI only so
-// far (see trigger/brand-info-extraction.ts).
+// brand_information.tone_descriptors/words_to_avoid now flow into both
+// system prompts below via buildBrandVoiceBlock() (lib/devto-article.ts) —
+// resolves the standing TODO that used to live here (extraction + Settings
+// UI existed via trigger/brand-info-extraction.ts, but nothing downstream
+// ever read the result). key_stats is not wired in this pass — proof-point
+// citation is a separate concern from voice/word-choice and would need its
+// own no-fabrication framing; left for a follow-up rather than folded in
+// here as an afterthought.
 import { logger, schemaTask } from "@trigger.dev/sdk";
 import OpenAI, { BadRequestError, NotFoundError, RateLimitError } from "openai";
 import type Anthropic from "@anthropic-ai/sdk";
 import { z } from "zod";
 import { supabaseAdmin } from "@/lib/supabase-server";
-import { buildDevtoSystemPrompt, buildRealLinksBlock } from "@/lib/devto-article";
+import { buildBrandVoiceBlock, buildDevtoSystemPrompt, buildRealLinksBlock } from "@/lib/devto-article";
 import { handleJobError } from "@/lib/errors/jobErrorHandler";
 import { callExternalService, ExternalServiceError } from "@/lib/errors/AppError";
 import { ErrorMessages } from "@/lib/errors/messages";
 import { createAnthropicClient } from "@/lib/anthropic-client";
 import { MODELS } from "@/lib/ai/models";
 import type { AppDna, StrategyContentPillar } from "@/types";
+
+interface BrandVoice {
+  tone_descriptors: string[] | null;
+  words_to_avoid: string[] | null;
+}
 
 // Pinned, predictable model for public-facing brand content — per
 // MODELS.BULK_CONTENT_FREE (lib/ai/models.ts). The previous unpinned
@@ -89,6 +95,22 @@ function buildSchedule(count: number, startDate: Date): Date[] {
   });
 }
 
+// CRAFT_PRINCIPLES_CONDENSED below: reasoning framework swapped for
+// .claude/skills/content-strategy/SKILL.md + .claude/skills/copywriting/
+// SKILL.md + .claude/skills/copy-editing/SKILL.md + .claude/skills/
+// marketing-psychology/SKILL.md combined — same skill-credit pattern as the
+// four Audits-family jobs (trigger/pricing-audit.ts:79 etc.) and this
+// file's own long-form path (lib/devto-article.ts's CRAFT_PRINCIPLES), but
+// deliberately compressed to one line per skill instead of that file's
+// fuller numbered list: this path runs on MODELS.BULK_CONTENT_FREE, a
+// pinned free-tier model kept cheap and fast on purpose (see the model
+// comment above) — bloating its prompt undermines exactly what that model
+// choice is for.
+const CRAFT_PRINCIPLES_CONDENSED = `- Be specific, not vague: a real number or concrete detail beats an abstract claim ("saves 3 hours a week," not "saves time").
+- Lead with the benefit, not the feature — what does the reader actually get, not what the product technically does.
+- Every non-obvious claim needs something to back it up — a real detail from the DNA/research given, not an assertion on its own.
+- A post either answers something people are already searching for, or says something genuinely worth sharing (a real insight, a specific number, a take) — not generic filler either way.`;
+
 function buildSystemPrompt(platform: "twitter" | "linkedin", count: number) {
   const constraints =
     platform === "twitter"
@@ -100,6 +122,11 @@ function buildSystemPrompt(platform: "twitter" | "linkedin", count: number) {
 You will be given the product's DNA (name, tagline, problem, features), its target personas, its content pillars (each with example topics), and — when available — this week's freshest trending topics and real user problems from ongoing research. Use this to write ${count} distinct, specific, non-repetitive posts that would genuinely resonate with the target personas. When a fresh topic or real problem is available and fits a pillar, prefer it over that pillar's static example topics — this is what keeps the content current week to week instead of repeating the same angles the strategy was written with.
 
 ${constraints}
+
+Writing principles:
+${CRAFT_PRINCIPLES_CONDENSED}
+
+If a "=== BRAND VOICE ===" section appears in what you're given, it always overrides the writing principles above whenever they conflict — the founder's specific stated tone and words-to-avoid win over this general guidance every time.
 
 Distribute the ${count} posts across the given content pillars as evenly as possible. Each post's "pillar" field must exactly match one of the pillar names you were given.
 
@@ -203,7 +230,8 @@ function buildDevtoUserPrompt(
   dna: AppDna,
   additionalContext: string | null,
   pillar: StrategyContentPillar,
-  realLinks: (string | null | undefined)[]
+  realLinks: (string | null | undefined)[],
+  brandVoice: BrandVoice | null
 ): string {
   const dnaBlock = `=== PRODUCT DNA ===\n${JSON.stringify(dna, null, 2)}`;
   const contextBlock = additionalContext
@@ -211,8 +239,9 @@ function buildDevtoUserPrompt(
     : "";
   const pillarBlock = `=== CONTENT PILLAR ===\n${JSON.stringify(pillar, null, 2)}`;
   const linksBlock = buildRealLinksBlock(realLinks);
+  const brandVoiceBlock = buildBrandVoiceBlock(brandVoice);
 
-  return `${dnaBlock}${contextBlock}\n\n${pillarBlock}\n\n${linksBlock}\n\nWrite the article around this content pillar's theme — pick one of its example topics as the specific angle. The hook must cite a specific, real detail from the product DNA or additional context above (an exact feature, an exact tagline phrase, a specific fact) — not a generic paraphrase.`;
+  return `${dnaBlock}${contextBlock}\n\n${pillarBlock}\n\n${linksBlock}${brandVoiceBlock ? `\n\n${brandVoiceBlock}` : ""}\n\nWrite the article around this content pillar's theme — pick one of its example topics as the specific angle. The hook must cite a specific, real detail from the product DNA or additional context above (an exact feature, an exact tagline phrase, a specific fact) — not a generic paraphrase.`;
 }
 
 async function generateDevtoArticles(
@@ -221,7 +250,8 @@ async function generateDevtoArticles(
   additionalContext: string | null,
   sourceUrl: string,
   pillars: StrategyContentPillar[],
-  tone: string | null
+  tone: string | null,
+  brandVoice: BrandVoice | null
 ): Promise<{ pillar: string; body: string }[]> {
   const selectedPillars = pillars.slice(0, WEEKLY_DEVTO_ARTICLE_COUNT);
   if (selectedPillars.length === 0) return [];
@@ -244,7 +274,7 @@ async function generateDevtoArticles(
         max_tokens: DEVTO_MAX_TOKENS,
         system: systemPrompt,
         messages: [
-          { role: "user", content: buildDevtoUserPrompt(dna, additionalContext, pillar, realLinks) },
+          { role: "user", content: buildDevtoUserPrompt(dna, additionalContext, pillar, realLinks, brandVoice) },
         ],
       })
     );
@@ -323,8 +353,10 @@ export const contentGeneration = schemaTask({
       // reflects week 3's actual trending topics, not what was trending when
       // the strategy was first generated a month ago. This connection did
       // not exist before — content-generation previously only read the
-      // static strategy.
-      const [{ data: topicRows }, { data: problemRows }] = await Promise.all([
+      // static strategy. brand_information (2026-08-01) rides in the same
+      // Promise.all — a maybeSingle() read since not every app has a brand
+      // identity row yet (see trigger/brand-info-extraction.ts).
+      const [{ data: topicRows }, { data: problemRows }, { data: brandInfo }] = await Promise.all([
         supabaseAdmin
           .from("research_findings")
           .select("findings")
@@ -343,7 +375,17 @@ export const contentGeneration = schemaTask({
           .eq("status", "active")
           .order("created_at", { ascending: false })
           .limit(RESEARCH_FINDINGS_PER_STREAM),
+        supabaseAdmin
+          .from("brand_information")
+          .select("tone_descriptors, words_to_avoid")
+          .eq("app_id", app_id)
+          .eq("workspace_id", workspace_id)
+          .maybeSingle(),
       ]);
+
+      const brandVoice: BrandVoice | null = brandInfo
+        ? { tone_descriptors: brandInfo.tone_descriptors, words_to_avoid: brandInfo.words_to_avoid }
+        : null;
 
       const researchBlock =
         (topicRows?.length ?? 0) > 0 || (problemRows?.length ?? 0) > 0
@@ -356,6 +398,8 @@ ${(topicRows ?? []).map((r) => JSON.stringify(r.findings)).join("\n") || "(none 
 ${(problemRows ?? []).map((r) => JSON.stringify(r.findings)).join("\n") || "(none this week)"}`
           : "";
 
+      const brandVoiceBlock = buildBrandVoiceBlock(brandVoice);
+
       const contextBlock = `=== APP DNA ===
 ${JSON.stringify(app.dna, null, 2)}
 
@@ -366,7 +410,7 @@ ${JSON.stringify(strategy.personas, null, 2)}
 ${JSON.stringify(strategy.content_pillars, null, 2)}
 
 === TONE ===
-${strategy.tone}${researchBlock}`;
+${strategy.tone}${researchBlock}${brandVoiceBlock ? `\n\n${brandVoiceBlock}` : ""}`;
 
       // Run sequentially rather than in parallel — two simultaneous calls to
       // the same free-tier model compounds rate-limit pressure.
@@ -388,7 +432,8 @@ ${strategy.tone}${researchBlock}`;
         app.additional_context,
         app.source_url,
         (strategy.content_pillars ?? []) as StrategyContentPillar[],
-        strategy.tone
+        strategy.tone,
+        brandVoice
       );
 
       const startDate = new Date();

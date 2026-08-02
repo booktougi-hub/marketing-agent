@@ -116,8 +116,9 @@ export const POST = withErrorHandling(async (
     throw new InternalError(ErrorMessages.brandInformation.TRIGGER_FAILED);
   }
 
+  let handle: { id: string };
   try {
-    await tasks.trigger<typeof brandInfoExtraction>(
+    handle = await tasks.trigger<typeof brandInfoExtraction>(
       "brand-info-extraction",
       { app_id: id, workspace_id: workspaceId },
       { tags: [appRunTag(id)] }
@@ -130,6 +131,17 @@ export const POST = withErrorHandling(async (
       .eq("workspace_id", workspaceId);
     throw new InternalError(ErrorMessages.brandInformation.TRIGGER_FAILED);
   }
+
+  // Tracked so trigger/job-watchdog.ts can detect a run that expired/
+  // crashed/was canceled before brand-info-extraction's own catch block
+  // ever ran — without this, a run that never executes leaves this row
+  // stuck at extraction_status: "processing" forever (see that job's own
+  // success/catch paths, which clear this on every real outcome).
+  await supabaseAdmin
+    .from("brand_information")
+    .update({ pending_run_id: handle.id })
+    .eq("app_id", id)
+    .eq("workspace_id", workspaceId);
 
   return NextResponse.json({ success: true }, { status: 200 });
 });

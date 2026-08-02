@@ -78,6 +78,32 @@ interface FindingTemplate {
   remediation: (value: unknown) => SeoGeoRemediation;
 }
 
+// Finding text below is otherwise transcribed plainly from what each check
+// actually measures (see lib/seo/evaluate.ts) — five templates' explanation/
+// remediation text specifically had their reasoning framework swapped for a
+// skill file each, matching the credited-comment pattern the four "Audits"
+// family jobs use (trigger/pricing-audit.ts:79, etc.), applied here to
+// finding TEXT instead of an LLM prompt: this whole file has no LLM call in
+// it, every check above is rule-based (see lib/seo/evaluate.ts), so a
+// skill's framework can only ever land in these static explanation/
+// remediation strings, never in "how the check reasons" — there's no
+// reasoning step to adapt. Weight/tier/polarity/penaltyPoints (all defined
+// in lib/seo/checkRegistry.ts, untouched by this pass) are what actually
+// drive scoring; none of that changed here.
+// - seo.schema.present / seo.schema.faq: .claude/skills/schema/SKILL.md
+//   (names the specific schema.org @types and required properties this
+//   product's own pages would actually want, instead of a generic "add
+//   structured data" nudge)
+// - seo.links.internal_out: .claude/skills/site-architecture/SKILL.md (the
+//   3-click rule and the 5-10-links-per-1000-words density guideline,
+//   instead of a bare link-count instruction). seo.links.internal_in has no
+//   entry here to adapt — it's permanently `notMeasurable` (this tool audits
+//   one page, not a full-site crawl; see lib/seo/evaluate.ts:295) and never
+//   reaches finding generation at all.
+// - seo.penalty.thin_content: .claude/skills/seo-audit/SKILL.md (that
+//   skill's own "Common Issues by Site Type" section calls out thin SaaS/
+//   product pages by name — used to make this finding's framing specific
+//   to a SaaS marketing page rather than a generic blog post)
 const FINDING_TEMPLATES: Record<string, FindingTemplate> = {
   "seo.index.crawlable": {
     title: "Page is blocked from search crawlers",
@@ -141,20 +167,20 @@ const FINDING_TEMPLATES: Record<string, FindingTemplate> = {
   "seo.schema.present": {
     title: "No structured data (schema.org) on this page",
     dimension: "retrievability",
-    explanation: () => "No schema.org markup was found — structured data helps both search engines and AI engines understand what this page actually is.",
-    remediation: () => ({ type: "technical", instruction: "Add relevant schema.org JSON-LD markup (e.g. SoftwareApplication or Organization) to this page.", snippet: '<script type="application/ld+json">{"@context":"https://schema.org","@type":"SoftwareApplication","name":"..."}</script>' }),
+    explanation: () => "No schema.org markup was found — structured data helps both search engines and AI engines understand what this page actually is. For a SaaS product page specifically, SoftwareApplication (name + offers, required) is the most directly relevant type; Organization (name + url) is the other near-universal baseline. If more than one type genuinely applies to this page, combine them under one @graph array rather than emitting separate, disconnected JSON-LD blocks.",
+    remediation: () => ({ type: "technical", instruction: "Add SoftwareApplication schema (with name and offers at minimum) and Organization schema (name and url) as JSON-LD to this page, combined under one @graph if using both.", snippet: '<script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"SoftwareApplication","name":"...","offers":{"@type":"Offer","price":"..."}},{"@type":"Organization","name":"...","url":"..."}]}</script>' }),
   },
   "seo.schema.faq": {
     title: "No FAQ schema",
     dimension: "retrievability",
-    explanation: () => "This page has no FAQ schema markup — FAQ-structured content is especially valuable for AI engines pulling direct answers to cite.",
-    remediation: () => ({ type: "technical", instruction: "Add an FAQ section with FAQPage schema markup covering the questions visitors actually ask about this product." }),
+    explanation: () => "This page has no FAQPage schema markup — FAQ-structured content is especially valuable for AI engines pulling direct answers to cite. FAQPage's one required property is mainEntity, an array of Question entities, each carrying its own acceptedAnswer — a plain FAQ-looking section in the visible copy with no matching JSON-LD doesn't count.",
+    remediation: () => ({ type: "technical", instruction: "Add an FAQ section with FAQPage schema markup covering the questions visitors actually ask about this product — each question needs a mainEntity entry with its own acceptedAnswer, not just a Question with no answer attached." }),
   },
   "seo.links.internal_out": {
     title: "Too few outbound internal links",
     dimension: "retrievability",
-    explanation: (value) => `This page links to only ${(value as { count: number }).count} other page(s) on the same site — linking to at least 2 helps crawlers discover more of the site from here.`,
-    remediation: () => ({ type: "technical", instruction: "Add links from this page to at least 2 other relevant pages on the same site." }),
+    explanation: (value) => `This page links to only ${(value as { count: number }).count} other page(s) on the same site — linking to at least 2 helps crawlers discover more of the site from here, and keeps important pages within the standard 3-click rule (any important page should be reachable within 3 clicks of the homepage).`,
+    remediation: () => ({ type: "technical", instruction: "Add links from this page to at least 2 other relevant pages on the same site, using descriptive anchor text (not \"click here\"/\"read more\"). As a rule of thumb, aim for roughly 5-10 internal links per 1,000 words of content." }),
   },
   "seo.http.ok": {
     title: "Page isn't returning a clean 200 response",
@@ -184,9 +210,9 @@ const FINDING_TEMPLATES: Record<string, FindingTemplate> = {
     dimension: "retrievability",
     explanation: (value) => {
       const v = value as { pageWordCount: number; competitorMedian: number };
-      return `This page has ${v.pageWordCount} words, less than half the ${v.competitorMedian}-word median among the competitors ranking for the same space — thin pages tend to rank and get cited less.`;
+      return `This page has ${v.pageWordCount} words, less than half the ${v.competitorMedian}-word median among the competitors ranking for the same space — thin pages tend to rank and get cited less. This is a common SaaS/product-page pattern specifically: a page that names features but never goes deep enough to answer how they actually work, who they're for, or what using them looks like in practice.`;
     },
-    remediation: () => ({ type: "technical", instruction: "Expand this page's content with substantive detail — specific features, use cases, and evidence — rather than padding." }),
+    remediation: () => ({ type: "technical", instruction: "Expand this page's content with substantive detail — specific features, real use cases, and evidence — rather than padding. For a SaaS product page, that usually means: how each feature actually works, a concrete use case per audience segment, and specifics (numbers, workflows, outcomes) instead of restating the feature name in different words." }),
   },
   "seo.offpage.mention_count": {
     title: "Very few sites mention this brand",

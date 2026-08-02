@@ -10,6 +10,7 @@ import {
   getCooldownHoursRemaining,
   getRemainingCredits,
   isCreditsResetDue,
+  type AgentActionCooldowns,
   type AgentActionType,
 } from "@/lib/agentCredits";
 import { withErrorHandling } from "@/lib/errors/apiHandler";
@@ -33,6 +34,8 @@ import type { pricingAudit } from "@/trigger/pricing-audit";
 import type { diagnosisRefreshCheck } from "@/trigger/diagnosis-refresh-check";
 import type { seoGeoAudit } from "@/trigger/seo-geo-audit";
 import type { brandInfoExtraction } from "@/trigger/brand-info-extraction";
+import type { dnaReextraction } from "@/trigger/dna-reextraction";
+import type { competitorProfileResearch } from "@/trigger/competitor-profile-research";
 import type { PlanTier } from "@/types";
 
 const postSchema = z.object({
@@ -48,6 +51,8 @@ const postSchema = z.object({
     "diagnosis_refresh",
     "seo_audit",
     "brand_info_extraction",
+    "dna_reextraction",
+    "competitor_profile_research",
   ]),
 });
 
@@ -111,7 +116,7 @@ export const POST = withErrorHandling(async (
   const { data: app } = await supabaseAdmin
     .from("apps")
     .select(
-      "id, agent_credits_used_this_week, agent_credits_reset_at, last_agent_action_at, diagnosis_status, diagnosis_refresh_status"
+      "id, agent_credits_used_this_week, agent_credits_reset_at, agent_action_cooldowns, diagnosis_status, diagnosis_refresh_status, dna, dna_reextraction_status, competitor_profile_status"
     )
     .eq("id", id)
     .eq("workspace_id", workspaceId)
@@ -178,12 +183,40 @@ export const POST = withErrorHandling(async (
     }
   }
 
+  // Product Information re-extraction only makes sense once the initial
+  // DNA extraction (onboarding, or Settings > App Identity's "Re-analyse
+  // App") has actually produced a `dna` row to refine — mirrors brand
+  // Identity's own "analyze first, re-analyze after" gate above.
+  if (actionType === "dna_reextraction") {
+    if (!app.dna) {
+      throw new ValidationError(ErrorMessages.dnaInformation.NOT_YET_ANALYZED, "NOT_YET_ANALYZED");
+    }
+    if (app.dna_reextraction_status === "processing") {
+      throw new ValidationError(ErrorMessages.dnaInformation.ALREADY_IN_PROGRESS, "ALREADY_IN_PROGRESS");
+    }
+  }
+
+  // Competitor profiling only makes sense once the founder's own DNA
+  // exists (it's the basis for the "competitive_implications" comparison —
+  // see lib/competitor-profile-core.ts), and refuses to pile onto a run
+  // still in flight, same gate shape as brand_info_extraction/
+  // dna_reextraction above.
+  if (actionType === "competitor_profile_research") {
+    if (!app.dna) {
+      throw new ValidationError(ErrorMessages.dnaInformation.NOT_YET_ANALYZED, "NOT_YET_ANALYZED");
+    }
+    if (app.competitor_profile_status === "processing") {
+      throw new ValidationError(ErrorMessages.competitorProfile.ALREADY_IN_PROGRESS, "ALREADY_IN_PROGRESS");
+    }
+  }
+
   const affordCheck = canAffordAction(app, actionType, planTier);
   if (!affordCheck.allowed) {
     throw new ForbiddenError(affordCheck.reason ?? ErrorMessages.research.NO_CREDITS_REMAINING);
   }
 
-  const cooldownHoursRemaining = getCooldownHoursRemaining(app.last_agent_action_at);
+  const cooldowns = (app.agent_action_cooldowns ?? {}) as AgentActionCooldowns;
+  const cooldownHoursRemaining = getCooldownHoursRemaining(cooldowns, actionType);
   if (cooldownHoursRemaining > 0) {
     throw new RateLimitError(ErrorMessages.research.COOLDOWN_ACTIVE, "RATE_LIMITED", {
       retryAfter: cooldownHoursRemaining,
@@ -202,7 +235,7 @@ export const POST = withErrorHandling(async (
     .update({
       agent_credits_used_this_week: newUsed,
       agent_credits_reset_at: newResetAt,
-      last_agent_action_at: nowIso,
+      agent_action_cooldowns: { ...cooldowns, [actionType]: nowIso },
     })
     .eq("id", id)
     .eq("workspace_id", workspaceId);
@@ -252,7 +285,50 @@ export const POST = withErrorHandling(async (
       .update({ extraction_status: "processing", extraction_error: null })
       .eq("app_id", id)
       .eq("workspace_id", workspaceId);
-    await tasks.trigger<typeof brandInfoExtraction>("brand-info-extraction", jobPayload, tagOptions);
+    const handle = await tasks.trigger<typeof brandInfoExtraction>("brand-info-extraction", jobPayload, tagOptions);
+    // See the same field on app/api/apps/[id]/brand-information/analyze/
+    // route.ts for why this is tracked — lets job-watchdog.ts detect a run
+    // that never reaches brand-info-extraction's own catch block.
+    await supabaseAdmin
+      .from("brand_information")
+      .update({ pending_run_id: handle.id })
+      .eq("app_id", id)
+      .eq("workspace_id", workspaceId);
+  } else if (actionType === "dna_reextraction") {
+    // Same "flip to processing before enqueueing" reasoning as
+    // brand_info_extraction above, and same pending_run_id tracking so
+    // trigger/job-watchdog.ts can detect a run that never reaches
+    // dna-reextraction's own catch block — both stored on `apps` here
+    // since (unlike brand_information) DNA lives on the apps row itself.
+    await supabaseAdmin
+      .from("apps")
+      .update({ dna_reextraction_status: "processing", dna_reextraction_error: null })
+      .eq("id", id)
+      .eq("workspace_id", workspaceId);
+    const handle = await tasks.trigger<typeof dnaReextraction>("dna-reextraction", jobPayload, tagOptions);
+    await supabaseAdmin
+      .from("apps")
+      .update({ dna_reextraction_pending_run_id: handle.id })
+      .eq("id", id)
+      .eq("workspace_id", workspaceId);
+  } else if (actionType === "competitor_profile_research") {
+    // Same "flip to processing before enqueueing" + pending_run_id tracking
+    // reasoning as dna_reextraction above.
+    await supabaseAdmin
+      .from("apps")
+      .update({ competitor_profile_status: "processing", competitor_profile_error: null })
+      .eq("id", id)
+      .eq("workspace_id", workspaceId);
+    const handle = await tasks.trigger<typeof competitorProfileResearch>(
+      "competitor-profile-research",
+      jobPayload,
+      tagOptions
+    );
+    await supabaseAdmin
+      .from("apps")
+      .update({ competitor_profile_pending_run_id: handle.id })
+      .eq("id", id)
+      .eq("workspace_id", workspaceId);
   }
 
   const { remaining } = getRemainingCredits(

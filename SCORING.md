@@ -297,8 +297,14 @@ Rules:
 - Confidence 0.9+ = very clear; 0.5-0.89 = judgment call; below 0.5 = uncertain
 - For statistics: only pass if the stat is specific and verifiable (a number, a percentage, a named study). Vague claims like "many users" do not count.
 - For citations: only pass if an external source is named or linked. Self-referential links do not count.
+
+Additional grounding for your judgment (informs how you evaluate the checks above — never changes what "confidence" means, and never overrides the evidence-tier/confidence-label system applied to your output afterward, which is not something you compute):
+- A 2024 Princeton study on generative engine optimisation measured the visibility lift of specific tactics: adding statistics +37%, adding citations +40%, adding quotations +30%, writing in an authoritative tone +25%. Use this only to calibrate how much a genuinely well-executed instance of "statistics"/"citations"/"quotation" should matter to your pass/fail call — do not restate these percentages in your JSON output, and do not treat this study as proof any specific piece of content will see this exact lift.
+- For "answer_first" and "standalone_chunks": the strongest passing instances state a direct, self-contained answer in roughly 40-60 words — long enough to be a real answer, short enough to be lifted as a standalone excerpt without surrounding context. Use this as a rough calibration point, not a hard cutoff either direction.
 `;
 ```
+
+**Provenance note (2026-08-01):** the "Additional grounding" paragraph above was adapted from `.claude/skills/ai-seo/SKILL.md` — see `lib/geo/evaluate.ts`'s comment above `buildGeoEvalPrompt()` for the full rationale. Kept mirrored here so the code comment's claim that the prompt is "transcribed verbatim from SCORING.md" stays true; if this block ever changes in one place, change it in both.
 
 Use `claude-sonnet-5` (same as all other agent jobs). Gate this call behind the Agent Action Credit pool — deduct 1 credit per content piece evaluated. Do not call for Tier 1 rule checks.
 

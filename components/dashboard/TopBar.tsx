@@ -78,7 +78,7 @@ export function TopBar({ userEmail }: { userEmail: string | null }) {
       </div>
 
       <div className="min-w-0 flex-1 md:hidden">
-        <AppSwitcher />
+        <AppSwitcher id="app-switcher-mobile" />
       </div>
 
       <div className="flex shrink-0 items-center gap-1">

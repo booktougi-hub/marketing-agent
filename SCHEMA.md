@@ -94,6 +94,14 @@ create table apps (
   source_url      text not null,                 -- the URL the user pasted
   product_type    text default 'other',          -- 'developer_tool' | 'mobile_app' | 'web_app' | 'saas' | 'browser_extension' | 'other'
   dna             jsonb,                         -- extracted DNA object (see DNA schema below)
+  dna_extraction_source jsonb,                   -- { [dna field]: 'auto' | 'manual' } — which top-level dna keys the customer has manually edited on the Product Information page; same role/shape as brand_information.extraction_source
+  dna_reextraction_status text not null default 'idle',  -- 'idle' | 'processing' | 'complete' | 'error' — lifecycle of trigger/dna-reextraction.ts (the Product Information page's own "Re-analyze"), deliberately separate from `status` below since that job never touches it
+  dna_reextraction_error  text,                  -- populated if dna_reextraction_status = 'error'
+  dna_reextraction_pending_run_id text,          -- Trigger.dev run id of an in-flight dna-reextraction run, if any; separate from pending_run_id below so it can never collide with a real pipeline run's tracking
+  competitor_profile_status text not null default 'idle',  -- 'idle' | 'processing' | 'complete' | 'error' — lifecycle of trigger/competitor-profile-research.ts (Product Information's "Research Competitors"), same independent pattern as dna_reextraction_status
+  competitor_profile_error  text,                -- populated if competitor_profile_status = 'error'
+  competitor_profile_pending_run_id text,        -- Trigger.dev run id of an in-flight competitor-profile-research run, if any
+  competitor_profile_last_generated_at timestamp with time zone,  -- when competitor-profile-research last actually completed for this app
   icon_url        text,                          -- app's favicon/logo, resolved during DNA extraction; null falls back to a first-letter avatar in the UI
   screenshot_url  text,                          -- homepage screenshot (Firecrawl `screenshot` format), captured during DNA extraction/re-analysis; null until the first successful scrape — Settings > App Identity's live-preview box falls back to a placeholder when null
   status          text not null default 'pending',
@@ -113,7 +121,8 @@ create table apps (
   pending_run_task text,                         -- which task pending_run_id refers to; null whenever pending_run_id is null
   agent_credits_used_this_week integer default 0,      -- unified manual-agent-action credits used this week, rate-limited per plan (see lib/agentCredits.ts)
   agent_credits_reset_at       timestamp with time zone,  -- when agent_credits_used_this_week resets to 0
-  last_agent_action_at         timestamp with time zone,  -- timestamp of the most recent manual agent action of any type (6h cooldown applies across all action types, not per-type)
+  last_agent_action_at         timestamp with time zone,  -- DEPRECATED 2026-07-29, superseded by agent_action_cooldowns below — column kept on the table but no longer written to, safe to drop in a later migration
+  agent_action_cooldowns       jsonb not null default '{}'::jsonb,  -- { [actionType]: ISO timestamp of the last time that action ran } — each AgentActionType (lib/agentCredits.ts) cools down independently (6h each); replaces last_agent_action_at's single shared timestamp, which meant using any one manual action blocked every other unrelated one
   preferred_research_day       text default 'sunday',    -- UTC day name the weekly research scan targets for this app (lib/schedule.ts RESEARCH_DAYS)
   preferred_research_hour      integer default 23,       -- UTC hour (0-23) the weekly research scan targets for this app
   first_outreach_completed boolean not null default false,  -- true once the app's first outreach ICP+preview run has been triggered
@@ -239,6 +248,18 @@ create index idx_apps_status on apps(status);
 > Sonnet). No RLS change needed — `apps_all` already covers new columns on
 > the same row.
 >
+> **Migration note (2026-07-29):** `dna_extraction_source`, `dna_reextraction_status`,
+> `dna_reextraction_error`, and `dna_reextraction_pending_run_id` were added via
+> `add_dna_reextraction_tracking_to_apps`, to support the Product Information page's
+> own field-level "Re-analyze" (`trigger/dna-reextraction.ts`) — the same
+> auto/manual-tracking + independent-status-column pattern already used by
+> `brand_information.extraction_source`/`extraction_status`/`extraction_error`/
+> `pending_run_id`, applied here to the `dna` column instead of a separate table
+> since DNA already lives on `apps` itself. `trigger/job-watchdog.ts` scans
+> `dna_reextraction_pending_run_id` the same way it already scans `pending_run_id`
+> and `brand_information.pending_run_id`. No RLS change needed — `apps_all` already
+> covers new columns on the same row.
+>
 > **Migration note (2026-07-27):** `screenshot_url` was added via
 > `add_screenshot_url_to_apps` — `trigger/dna-extraction.ts` now adds
 > `"screenshot"` to its existing Firecrawl `formats` array (the same scrape
@@ -248,6 +269,22 @@ create index idx_apps_status on apps(status);
 > whenever DNA is re-extracted (initial onboarding, or Settings > App
 > Identity's "Re-analyse App"). No RLS change needed — `apps_all` already
 > covers new columns on the same row.
+>
+> **Migration note (2026-07-29):** `agent_action_cooldowns` was added via
+> `add_agent_action_cooldowns_to_apps`, prompted by a real repro: re-analyzing
+> Product Information and then Brand Identity minutes apart hit the same "please
+> wait" cooldown, because `last_agent_action_at` was one shared timestamp
+> across every `AgentActionType` (lib/agentCredits.ts) — using any single
+> manual action blocked all others for 6 hours, not just that one. Every read/
+> write of the old column (`app/api/apps/[id]/agent-action/route.ts`,
+> `lib/chat/tools.ts`'s three action-executing tools, `components/apps/
+> agent-action-empty-state.tsx` and its ~9 page-level callers,
+> `trigger/job-watchdog.ts`'s credit-refund helper) now reads/writes this
+> per-actionType map instead — `getCooldownHoursRemaining(cooldowns,
+> actionType)` in `lib/agentCredits.ts` takes the map plus which action to
+> check. `last_agent_action_at` is left in place but dead (see its own row
+> above) rather than dropped in the same pass. No RLS change needed —
+> `apps_all` already covers new columns on the same row.
 
 **DNA JSON structure (saved in `dna` column):**
 ```json
@@ -255,14 +292,33 @@ create index idx_apps_status on apps(status);
   "name": "string",
   "tagline": "string",
   "problem": "string",
-  "features": ["string"],
   "target_audience": "string",
-  "pricing": "string",
   "competitors": ["string"],
   "tone": "casual | professional | technical",
-  "additional_urls": ["string"]
+  "additional_urls": ["string"],
+  "app_store_urls": { "play_store": "string | null", "app_store": "string | null" },
+
+  "overview": { "name": "string", "website": "string", "one_liner": "string" },
+  "what_it_does": "string | null",
+  "key_features": ["string"],
+  "product_category": ["string"],
+  "product_type": "string | null",
+  "target_customers": "string | null",
+  "primary_cta": "string | null",
+  "tech_signals": {
+    "model_or_stack_used": "string | null",
+    "supported_formats_or_languages": ["string"],
+    "integrations": ["string"],
+    "architecture_description": "string | null"
+  },
+  "business_model": { "narrative": "string | null", "source": "brand_information | dna_extraction_fallback | null" }
 }
 ```
+> **Migration note (2026-07-29):** `overview`, `what_it_does`, `key_features`, `product_category`, `product_type`, `target_customers`, `primary_cta`, `tech_signals`, and `business_model` added via `trigger/dna-extraction.ts` + the new `trigger/dna-reextraction.ts`/`lib/dna-extraction-core.ts`, replacing an earlier same-week attempt at some of these fields (`what_it_does`/`product_categories`/`business_model`/`primary_cta`/`tech_signals` as flat strings/arrays) with the deeper, spec-matched shapes shown above. All nine are optional on `AppDna` (`types/index.ts`) — rows extracted before this change won't have them. `features`/`pricing` (the old flat fields from that earlier attempt) were dropped outright rather than kept alongside their replacements — both had zero consumers anywhere in the codebase at the time, confirmed by grep before removal; `key_features` supersedes `features`, and `business_model.narrative` supersedes `pricing`. `name`/`tagline`/`problem`/`target_audience`/`competitors`/`tone`/`additional_urls`/`app_store_urls` are unchanged and still read directly (not just via `JSON.stringify(dna)`) by several trigger jobs and `lib/discovery-query-builder.ts`/`lib/competitor-discovery.ts` — never rename those without updating every call site.
+>
+> Extraction itself changed from a single homepage scrape to a small multi-page crawl (homepage + best-effort features/how-it-works, pricing, docs, and about pages — link-discovery first via `lib/site-crawl.ts#findLinksByKeywords`, falling back to a couple of common path guesses per category, every failure swallowed) so the extraction prompt actually has the pages that hold specific numbers/named things to preserve verbatim. Per Part 3 of the request that drove this: `business_model.narrative` is never an independent second guess at structured pricing — `lib/dna-extraction-core.ts` reads `brand_information.pricing_summary` for the app first; if present, the model is instructed to only summarize those known numbers (`source: "brand_information"`); if absent, it may infer a narrative-only fallback directly from the crawl (`source: "dna_extraction_fallback"`, to be superseded once Brand Identity extraction actually runs).
+>
+> `trigger/dna-extraction.ts` (initial onboarding + Settings > App Identity's "Re-analyse App") still fully overwrites `dna` on every run — a deliberate full pipeline restart, unchanged behavior. The new `trigger/dna-reextraction.ts` is a second, narrow, non-pipeline job — the Product Information page's own "Re-analyze" — that re-crawls and re-extracts but merges field-by-field against `apps.dna_extraction_source` so it never overwrites a field the customer has manually edited, mirroring `brand_information.extraction_source`/`brand-info-extraction.ts` exactly. See the migration note below for the columns this needed.
 
 ---
 
@@ -816,7 +872,31 @@ create table competitor_research (
   scraped_summary    text,
   pricing_notes      text,
   positioning_notes  text,
-  created_at         timestamp with time zone default now()
+  created_at         timestamp with time zone default now(),
+  -- Deep profile columns (2026-07-29) — filled in by the on-demand
+  -- "Research Competitors" action on Product Information's Competitor
+  -- Information section (trigger/competitor-profile-research.ts), adapted
+  -- from .claude/skills/competitor-profiling's template. All null/empty
+  -- until that action has run for a given competitor row — the shallow
+  -- columns above (scraped_summary/pricing_notes/positioning_notes) are
+  -- populated at onboarding and remain the fallback display until then.
+  tagline                   text,
+  founded_year              text,
+  headquarters              text,
+  team_size_estimate        text,
+  target_audience           text,
+  positioning_angle         text,
+  key_messaging_themes      text[],
+  core_features             text[],
+  notable_differentiators   text[],
+  integrations              text[],
+  pricing_tiers             jsonb,        -- [{ tier_name, price, key_inclusions }]
+  billing_notes             text,
+  free_trial                text,
+  strengths                 text[],
+  weaknesses                text[],
+  competitive_implications  jsonb,        -- { where_they_win, where_we_win, opportunities, threats }
+  profile_generated_at      timestamp with time zone
 );
 
 alter table competitor_research enable row level security;
@@ -834,6 +914,23 @@ create index idx_competitor_research_workspace_id on competitor_research(workspa
 ```
 
 > RLS and both indexes confirmed directly against the live table (`relrowsecurity = true`, policy `competitor_research_all` present with the standard `workspace_id` predicate, `idx_competitor_research_app_id`/`idx_competitor_research_workspace_id` both exist) before `trigger/pricing-audit.ts` was written to query it — this DDL reflects what's actually deployed, not a guess.
+>
+> **Migration note (2026-07-29):** The deep profile columns above were added via
+> `add_competitor_deep_profile_columns`, alongside `apps.competitor_profile_status`/
+> `competitor_profile_error`/`competitor_profile_pending_run_id`/
+> `competitor_profile_last_generated_at` (same independent-status-column pattern as
+> `dna_reextraction_*` — see the `apps` table above), for the new "Research
+> Competitors" on-demand action. `trigger/competitor-profile-research.ts` reuses
+> whatever rows `trigger/competitor-research.ts` already created at onboarding
+> (falling back to fresh discovery via `lib/competitor-discovery.ts` only if none
+> exist) and `UPDATE`s them in place with the deeper fields, rather than writing a
+> second parallel table — one row per competitor stays the single source of truth.
+> Explicitly Firecrawl-only, no SEO/backlink/review data (this project has no
+> DataForSEO-equivalent integration); `competitive_implications` is generated by
+> feeding the target app's own `dna` into the same Claude call, so the comparison
+> is always grounded in the founder's actual product data, not assumed. No RLS
+> change needed on either table — existing policies already cover new columns on
+> the same row.
 
 ---
 
@@ -1002,6 +1099,7 @@ create table brand_information (
   extraction_source     jsonb,         -- { field_name: 'auto'|'manual' }
   extraction_status     text not null default 'idle',  -- 'idle' | 'processing' | 'complete' | 'error'
   extraction_error      text,          -- populated when extraction_status = 'error'
+  pending_run_id        text,          -- the in-flight brand-info-extraction run's id, cleared by that job's own success/catch paths; lets trigger/job-watchdog.ts detect a run that expired/crashed/was canceled before ever reaching them, the same way it already does for apps.pending_run_id
   last_analyzed_at      timestamptz,
   updated_at            timestamptz default now()
 );
@@ -1037,6 +1135,8 @@ create index idx_brand_information_workspace_id on brand_information(workspace_i
 > **Migration note (2026-07-24):** Added via `create_brand_information`. Two deviations from the originally requested DDL, both required by this project's non-negotiable rules (CLAUDE.md Rule #1 / this file's Core Rules): added `workspace_id` (every table must have one, filtered on every query — the request's DDL only had `app_id`) and used `uuid_generate_v4()` instead of `gen_random_uuid()` for the primary key default (Core Rule #3 mandates the former; both work identically on Postgres 15, this is a consistency choice, not a functional one). Also added `extraction_status`/`extraction_error` beyond the requested columns — the async extraction job needs a way to signal "still running" / "failed, here's why" to the Settings UI, the same role `apps.status`/`apps.error_message` play for the main onboarding pipeline; without them the UI would have no way to end a loading spinner on failure. `brand-info-extraction.ts` is a side/enrichment job, not one of the three pipeline-blocking jobs (dna-extraction, strategy-generation, content-generation) — it never touches `apps.status` itself, per the convention documented in `lib/errors/jobErrorHandler.ts`.
 >
 > **Storage bucket:** `brand-assets` (public, 5MB limit, image mime types only) was created in the same migration for `logo_url`/`product_screenshots` uploads, mirroring the existing `app-docs` bucket's workspace-scoped RLS convention (`storage.foldername(name)[1]` must match a workspace the uploading user belongs to) for the INSERT policy. Unlike `app-docs`, this bucket is `public: true` — logos/screenshots render directly as `<img>` sources in the dashboard, so no SELECT policy is needed (public buckets serve reads unauthenticated, bypassing RLS). This is the first documented Storage bucket in this file; `app-docs` (see `apps.doc_paths` above) predates this convention and was created out-of-band without a written record — worth being aware of if you go looking for its provisioning history.
+>
+> **Migration note (2026-07-28):** `pending_run_id` added via `add_pending_run_id_to_brand_information`, prompted by a real stuck-forever repro: a brand-info-extraction run expired (Trigger.dev TTL reached with no worker running) and left a row at `extraction_status: 'processing'` permanently, since the job's own catch block never ran and `trigger/job-watchdog.ts` — built for exactly this failure mode — only ever watched `apps.pending_run_id`, not this table. Both trigger routes (`brand-information/analyze` and `agent-action`'s `brand_info_extraction` branch) now store the triggered run's id here right after enqueueing it; `brand-info-extraction.ts` clears it on both its success and catch paths; `job-watchdog.ts` now scans this column the same way it already scans `apps.pending_run_id`.
 
 ---
 
@@ -1160,6 +1260,43 @@ create index idx_chat_declines_created_at on chat_declines(created_at);
 ```
 
 > **Migration note (2026-07-27):** Added via `create_chat_declines`. Same `workspace_id` + `uuid_generate_v4()` + `..._all` RLS deviation from the originally requested DDL as the `create_chat_tables` migration note directly above — the request's DDL didn't include `workspace_id` or RLS at all, both required unconditionally by this file's Core Rules #1–#3.
+
+---
+
+## Table: chat_action_suggestions
+
+Logs one row per proactive tool offer the chat coordinator renders as an inline confirm card — today that's only `add_content_to_plan` (`lib/chat/tools.ts`), but the table is written from a small allowlist (`PROACTIVE_OFFER_TOOLS`) so a future proactive-offer tool logs the same way without a schema change. A row is inserted with `status = 'offered'` in `app/api/chat/route.ts` right where the matching `pending_chat_actions` row is created, then flipped to `'confirmed'` or `'dismissed'` in `app/api/chat/confirm/route.ts` once the founder acts on the card. Same purpose as `chat_declines` above: write-only for now, reviewed manually later — if a given suggestion type gets dismissed far more than confirmed, that's evidence to tighten when it's offered.
+
+```sql
+create table chat_action_suggestions (
+  id                uuid primary key default uuid_generate_v4(),
+  conversation_id   uuid references chat_conversations(id) on delete cascade not null,
+  app_id            uuid references apps(id) on delete cascade not null,
+  workspace_id      uuid references workspaces(id) on delete cascade not null,
+  pending_action_id uuid references pending_chat_actions(id) on delete cascade not null,
+  tool_name         text not null,
+  status            text default 'offered' check (status in ('offered','confirmed','dismissed')),
+  created_at        timestamp with time zone default now()
+);
+
+alter table chat_action_suggestions enable row level security;
+
+create policy "chat_action_suggestions_all" on chat_action_suggestions
+  for all using (
+    workspace_id in (
+      select workspace_id from workspace_members
+      where user_id = auth.uid()
+    )
+  );
+
+create index idx_chat_action_suggestions_conversation_id on chat_action_suggestions(conversation_id);
+create index idx_chat_action_suggestions_app_id on chat_action_suggestions(app_id);
+create index idx_chat_action_suggestions_workspace_id on chat_action_suggestions(workspace_id);
+create index idx_chat_action_suggestions_pending_action_id on chat_action_suggestions(pending_action_id);
+create index idx_chat_action_suggestions_status on chat_action_suggestions(status);
+```
+
+> **Migration note (2026-08-01):** Added via `create_chat_action_suggestions`. Same `workspace_id` + `uuid_generate_v4()` + `..._all` RLS deviation from the originally requested DDL as the two chat-table migration notes above. One additional deviation beyond those: `pending_action_id` (references `pending_chat_actions(id)`) wasn't in the original DDL either — without it, `app/api/chat/confirm/route.ts` has no reliable way to find which suggestion row corresponds to the action the founder just confirmed or declined, the same gap `pending_chat_actions.tool_use_id` closed for the confirm route's `tool_result` posting (see the `create_chat_tables` note above).
 
 ---
 

@@ -49,6 +49,20 @@ const strategySchema = z.object({
 // (bottleneck + primary_lever) is now the headline of the strategy, not the
 // DNA in isolation. Personas and pillars exist to execute the diagnosed
 // lever, not as a generic 5-pillar template unrelated to it.
+//
+// CORE FRAMEWORK below: reasoning framework swapped for
+// .claude/skills/marketing-council/SKILL.md + .claude/skills/
+// marketing-ideas/SKILL.md + .claude/skills/marketing-plan/SKILL.md +
+// .claude/skills/marketing-loops/SKILL.md combined — same "compress the
+// skill's framework into a numbered list baked into a static prompt"
+// pattern the Audits-family jobs use (trigger/pricing-audit.ts:79 etc.),
+// given the fullest treatment of any adaptation in this batch because this
+// job runs on HIGH_STAKES_SYNTHESIS (Opus) and is the single highest-
+// leverage, lowest-frequency call this reasoning could strengthen — one
+// strategy per app, read directly by the founder. marketing-loops
+// contributes the least (it's about ongoing maintenance loops, not
+// strategy-setting) so its cadence-awareness idea is folded into item 4
+// rather than given its own numbered entry.
 const SYSTEM_PROMPT = `You are a marketing strategist turning a growth diagnosis into an executable content strategy for a software product.
 
 You are given: the product's DNA, a growth diagnosis (the single biggest bottleneck holding this product back, why, and the one primary lever recommended to address it), and real competitor research the diagnosis was based on.
@@ -56,6 +70,17 @@ You are given: the product's DNA, a growth diagnosis (the single biggest bottlen
 The diagnosis and primary_lever are the headline of this strategy, not background color. Every persona and content pillar you generate must visibly serve the primary_lever and address the diagnosed bottleneck — do not produce a generic 5-pillar template that ignores the diagnosis. For example, if the bottleneck is "trust" and the primary_lever is "publish comparison content showing why you're a safer choice than [competitor]", your content pillars must include comparison/trust-building content by name, not just generically-relevant topics. If the bottleneck is "awareness", pillars and channel choices should prioritize reach and discovery over conversion-focused content. If "activation", pillars should focus on onboarding clarity, quick wins, and reducing time-to-value. If "distribution", pillars and channels should target wherever the diagnosis says the real buyers actually gather.
 
 The developer may also provide additional notes or a correction to the diagnosis directly — when present, prioritise those alongside the DNA and diagnosis since they come straight from the person who built the product and know things Claude doesn't.
+
+=== CORE FRAMEWORK (apply this reasoning, do not just restate it) ===
+
+1. NAME THE STRATEGIC TENSION, DON'T DEFAULT TO ONE LENS — a strategy this specific has to resolve a real tradeoff (differentiation vs. category fit, reach vs. resonance, smallest-viable-audience vs. mass availability). Pick the lens that actually fits this product's stage and diagnosis, and let that choice be visible in the output — a recommendation that would survive with the product's name swapped out for a competitor's isn't a real take.
+2. AARRR AS THE ORGANIZING LENS — every persona and pillar should be legible as serving a specific funnel stage (Acquisition, Activation, Retention, Referral, Revenue) tied to the diagnosed bottleneck, not a flat list of content ideas with no stage attached.
+3. JOBS TO BE DONE, NOT A CHECKLIST OF TOPICS — content pillars should map to the 2-3 things this buyer actually "hires" the product to do, not generically-relevant topics disconnected from why anyone would actually choose this product.
+4. STAGE- AND BUDGET-APPROPRIATE CHANNELS, AT A SUSTAINABLE CADENCE — recommend channels and tactics this product could actually execute given its likely stage (pre-launch/early-stage) and resourcing (a solo founder, not a funded growth team), at a cadence that matches how fast that channel's own feedback loop actually moves — don't recommend paid acquisition or brand campaigns to a bootstrapped early product, or a daily cadence on a channel that only pays off weekly.
+5. OPEN A NEW GROWTH AVENUE, DON'T JUST DOUBLE DOWN — real growth is a series of plateaus, not a straight line; channel choices should open an avenue relevant to the diagnosed bottleneck, not just repeat whatever's already saturated or already tried.
+6. CUSTOMIZE TO THIS PRODUCT'S ACTUAL SITUATION — ground personas and pillars in this product's real category, stage, and what the DNA shows has already been tried, not a generic SaaS template; a developer-tool product's acquisition/activation shape looks different from a D2C or marketplace product's.
+7. NAME THE RISK, DON'T HEDGE — after picking a direction, be explicit about the tradeoff being accepted (what this strategy is choosing not to do, or the risk it's taking on) rather than presenting every recommendation as strictly upside.
+8. NO GENERIC LANGUAGE WITHOUT A SPECIFIC MOVE BEHIND IT — "build a community" or "improve SEO" without naming the actual move (which subreddit, which keyword, which comparison page) is a named failure mode; every pillar and channel choice needs a concrete, specific action behind it, grounded in this product's real DNA and diagnosis.
 
 Respond with ONLY a JSON object matching this exact shape — no prose, no markdown code fences:
 {

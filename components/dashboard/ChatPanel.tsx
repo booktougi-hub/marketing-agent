@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { AuditFindingCard } from "@/components/apps/audit-finding-card";
+import { ChatMarkdownContent } from "@/components/apps/markdown-content";
 import { useDashboardApp } from "@/components/dashboard/AppContext";
 import { parseApiError } from "@/lib/errors/parseApiError";
 import type { ChatMessage, ChatMessageRole } from "@/types";
@@ -18,17 +19,25 @@ const DEFAULT_WIDTH = 360;
 const MIN_WIDTH = 280;
 const MAX_WIDTH = 640;
 
+// User bubbles stay plain text (whitespace-pre-wrap, no parsing) — a founder
+// typing "**not sure**" or "- one\n- two" didn't mean markdown, and rendering
+// their literal input as formatting would be surprising. Assistant bubbles
+// render through ChatMarkdownContent instead: the coordinator's replies
+// (SCOPED_SYSTEM_PROMPT) are expected to use real markdown now, so this is
+// what actually turns "**bold**"/"- item" into formatting instead of
+// literal asterisks and dashes — see that component's comment for why it's
+// a distinct, tighter-spaced variant from the article-body MarkdownContent.
 function ChatBubble({ role, children }: { role: ChatMessageRole; children: string }) {
   const isUser = role === "user";
   return (
     <div className={cn("flex", isUser ? "justify-end" : "justify-start")}>
       <div
         className={cn(
-          "max-w-[85%] rounded-lg px-3 py-2 text-sm leading-snug whitespace-pre-wrap",
-          isUser ? "bg-primary text-primary-foreground" : "bg-muted text-foreground"
+          "max-w-[85%] rounded-lg px-3 py-2 text-sm leading-snug",
+          isUser ? "whitespace-pre-wrap bg-primary text-primary-foreground" : "bg-muted text-foreground"
         )}
       >
-        {children}
+        {isUser ? children : <ChatMarkdownContent content={children} />}
       </div>
     </div>
   );

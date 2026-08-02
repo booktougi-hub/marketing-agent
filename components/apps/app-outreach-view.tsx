@@ -214,7 +214,7 @@ function ProspectsTab({
   planTier,
   agentCreditsUsedThisWeek,
   agentCreditsResetAt,
-  lastAgentActionAt,
+  agentActionCooldowns,
 }: {
   appId: string;
   prospects: ColdEmailProspect[];
@@ -222,7 +222,7 @@ function ProspectsTab({
   planTier: PlanTier;
   agentCreditsUsedThisWeek: number;
   agentCreditsResetAt: string | null;
-  lastAgentActionAt: string | null;
+  agentActionCooldowns: Record<string, string> | null;
 }) {
   const [statusFilter, setStatusFilter] = useState<"all" | ProspectStatus>("all");
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
@@ -292,7 +292,7 @@ function ProspectsTab({
         planTier={planTier}
         agentCreditsUsedThisWeek={agentCreditsUsedThisWeek}
         agentCreditsResetAt={agentCreditsResetAt}
-        lastAgentActionAt={lastAgentActionAt}
+        agentActionCooldowns={agentActionCooldowns}
         nextRunAt={null}
       />
     );
@@ -575,7 +575,7 @@ export function AppOutreachView({
   planTier,
   agentCreditsUsedThisWeek,
   agentCreditsResetAt,
-  lastAgentActionAt,
+  agentActionCooldowns,
   initialIcpData,
   initialIcpStatus,
   firstOutreachCompleted,
@@ -586,7 +586,7 @@ export function AppOutreachView({
   planTier: PlanTier;
   agentCreditsUsedThisWeek: number;
   agentCreditsResetAt: string | null;
-  lastAgentActionAt: string | null;
+  agentActionCooldowns: Record<string, string> | null;
   initialIcpData: IcpData | null;
   initialIcpStatus: IcpStatus;
   firstOutreachCompleted: boolean;
@@ -661,7 +661,7 @@ export function AppOutreachView({
             planTier={planTier}
             agentCreditsUsedThisWeek={agentCreditsUsedThisWeek}
             agentCreditsResetAt={agentCreditsResetAt}
-            lastAgentActionAt={lastAgentActionAt}
+            agentActionCooldowns={agentActionCooldowns}
           />
         ))}
       {tab === "sequences" && (

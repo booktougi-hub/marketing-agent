@@ -14,6 +14,8 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
+import { parseApiError } from "@/lib/errors/parseApiError";
+import { useIsStale } from "@/lib/hooks/useIsStale";
 import { supabase } from "@/lib/supabase";
 import {
   AppContentView,
@@ -321,9 +323,17 @@ export function AppContentGate({
   const [strategy, setStrategy] = useState(initialStrategy);
   const [errorMessage, setErrorMessage] = useState(initialErrorMessage);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [stillRunningNotice, setStillRunningNotice] = useState(false);
   const [approving, setApproving] = useState(false);
   const [regenerating, setRegenerating] = useState(false);
   const [retrying, setRetrying] = useState(false);
+  // A full pipeline run (dna-extraction -> competitor-research ->
+  // diagnosis -> strategy-generation, each its own Firecrawl/Claude calls)
+  // can legitimately take a couple of minutes even when healthy, so this
+  // uses a longer threshold than the single-job ProcessingCard default —
+  // called unconditionally per the Rules of Hooks, even though it's only
+  // rendered from the loading-status branch below.
+  const stale = useIsStale(180_000);
 
   useEffect(() => {
     const channel = supabase
@@ -391,12 +401,23 @@ export function AppContentGate({
 
   async function handleRetry() {
     setActionError(null);
+    setStillRunningNotice(false);
     setRetrying(true);
     try {
       const response = await fetch(`/api/apps/${appId}/retry`, { method: "POST" });
       if (!response.ok) {
-        const data = (await response.json()) as { error?: string };
-        throw new Error(data.error || "Failed to retry.");
+        const { message, code } = await parseApiError(response);
+        // Retry can now be called while still in a loading status (not
+        // just once flipped to 'error') — the backend checks whether the
+        // tracked run has actually died before allowing it (see
+        // lib/pipelineRetry.ts). NOT_IN_ERROR_STATE here means it checked
+        // and the run is genuinely still in progress, which isn't a
+        // failure worth alarming the founder over — just keep waiting.
+        if (code === "NOT_IN_ERROR_STATE") {
+          setStillRunningNotice(true);
+          return;
+        }
+        throw new Error(message);
       }
       // The realtime subscription above will also confirm the new status,
       // but this avoids a flash of the stale error card while waiting for
@@ -477,10 +498,31 @@ export function AppContentGate({
         <CardContent className="flex flex-col items-center gap-3 py-16 text-center">
           <Loader2 className="size-6 animate-spin text-muted-foreground" />
           <p className="text-sm text-muted-foreground">{STATUS_LABELS[status]}</p>
-          <p className="max-w-sm text-xs text-muted-foreground">
-            This runs in the background — feel free to explore the other tabs
-            while you wait, we&apos;ll bring you back here automatically.
-          </p>
+          {stale ? (
+            <>
+              <p className="max-w-sm text-xs text-muted-foreground">
+                {stillRunningNotice
+                  ? "Still genuinely in progress — no need to keep clicking, we'll bring you back here automatically."
+                  : "This is taking longer than usual. It may have been interrupted — you can check its status below."}
+              </p>
+              {!stillRunningNotice && (
+                <Button variant="outline" size="sm" onClick={handleRetry} disabled={retrying}>
+                  {retrying && <Loader2 className="animate-spin" />}
+                  {retrying ? "Checking..." : "Check status"}
+                </Button>
+              )}
+              {actionError && (
+                <p role="alert" className="text-sm text-destructive">
+                  {actionError}
+                </p>
+              )}
+            </>
+          ) : (
+            <p className="max-w-sm text-xs text-muted-foreground">
+              This runs in the background — feel free to explore the other tabs
+              while you wait, we&apos;ll bring you back here automatically.
+            </p>
+          )}
         </CardContent>
       </Card>
     );

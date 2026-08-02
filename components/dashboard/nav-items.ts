@@ -51,16 +51,25 @@ export interface NavItem {
   // (the "Social Content" group) — AppContext uses this to tell those apart
   // from the plain "Content" link, which shares the same URL segment.
   platformFilter?: ContentPlatform;
+  // Short monochromatic tag rendered at the row's trailing edge (e.g. "GA").
+  // Distinct from platformFilter's colored abbreviation chip.
+  badge?: string;
 }
 
 // Order here drives the order rendered in the app sidebar's primary group.
+// Labels for the working, agent-driven sections carry an "Agent" suffix
+// (Content Agent, Strategy Agent, ...) — this SaaS's whole pitch is
+// autonomous agents doing the marketing work, and app-services-view.tsx's
+// descriptions already refer to e.g. "the onboarding-audit agent"; the
+// suffix just makes that framing visible in the nav too. Overview and
+// Settings aren't agents themselves, so they keep plain labels.
 export const NAV_ITEMS: NavItem[] = [
   { section: "overview", label: "Overview", href: (id) => `/dashboard/apps/${id}/overview`, icon: LayoutDashboard },
-  { section: "content", label: "Content", href: (id) => `/dashboard/apps/${id}/content`, icon: FileText },
-  { section: "opportunities", label: "Opportunities", href: (id) => `/dashboard/apps/${id}/opportunities`, icon: Compass },
-  { section: "outreach", label: "Outreach", href: (id) => `/dashboard/apps/${id}/outreach`, icon: Send },
-  { section: "research", label: "Research", href: (id) => `/dashboard/apps/${id}/research`, icon: Search },
-  { section: "strategy", label: "Strategy", href: (id) => `/dashboard/apps/${id}/strategy`, icon: Target },
+  { section: "content", label: "Content Agent", href: (id) => `/dashboard/apps/${id}/content`, icon: FileText },
+  { section: "opportunities", label: "Opportunities Agent", href: (id) => `/dashboard/apps/${id}/opportunities`, icon: Compass },
+  { section: "outreach", label: "Outreach Agent", href: (id) => `/dashboard/apps/${id}/outreach`, icon: Send },
+  { section: "research", label: "Research Agent", href: (id) => `/dashboard/apps/${id}/research`, icon: Search },
+  { section: "strategy", label: "Strategy Agent", href: (id) => `/dashboard/apps/${id}/strategy`, icon: Target },
   { section: "settings", label: "Settings", href: (id) => `/dashboard/apps/${id}/settings`, icon: Settings },
 ];
 
@@ -156,35 +165,50 @@ export const AUDIT_NAV_ITEMS: NavItem[] = [
 
 // The "Analytics" family — Google Analytics, SEO, and GEO. SEO and GEO are
 // both real, working pages now (SCORING.md's two evaluation tracks, one
-// engine — see trigger/seo-geo-audit.ts). Google Analytics is still an
-// honest "not built yet" placeholder (see its page.tsx) rather than a
-// broken link, pending a Google Cloud OAuth client.
+// engine — see trigger/seo-geo-audit.ts), so in the sidebar they render as
+// agent rows alongside the other working agents. Google Analytics is still
+// an honest "not built yet" placeholder (see its page.tsx) rather than a
+// broken link, pending a Google Cloud OAuth client — it renders on its own
+// under the sidebar's Performance section, badged "GA". Kept as one array
+// (only AppSidebar consumes it, and it iterates all three) rather than
+// splitting the export, so the split lives in the one place that cares
+// about presentation grouping.
 export const ANALYTICS_NAV_ITEMS: NavItem[] = [
   {
     section: "google-analytics",
-    label: "Google Analytics",
+    label: "Analytics",
     href: (id) => `/dashboard/apps/${id}/google-analytics`,
     icon: BarChart3,
+    badge: "GA",
   },
   {
     section: "seo",
-    label: "SEO",
+    label: "SEO Agent",
     href: (id) => `/dashboard/apps/${id}/seo`,
     icon: TrendingUp,
   },
   {
     section: "geo",
-    label: "GEO",
+    label: "GEO Agent",
     href: (id) => `/dashboard/apps/${id}/geo`,
     icon: Sparkles,
   },
 ];
 
-export const DOCUMENTATION_NAV_LABEL = "Documentation";
-export const PRIMARY_NAV_LABEL = "Growth";
-export const SOCIAL_NAV_LABEL = "Social Content";
-export const AUDITS_NAV_LABEL = "Audits";
-export const ANALYTICS_NAV_LABEL = "Analytics";
+// The sidebar's three top-level sections tell the product's growth story
+// top to bottom: get set up (Core), let the agents do the work (AI
+// Agents), then watch the numbers (Performance). Unlike the old
+// Documentation/Growth/Social Content/Audits/Analytics groups, these three
+// are always visible (no accordion) — only individual agent rows with
+// children expand/collapse.
+export const CORE_NAV_LABEL = "Core";
+export const AGENTS_NAV_LABEL = "AI Agents";
+export const PERFORMANCE_NAV_LABEL = "Performance";
+// Label for the synthetic "Audit Agents" tree row that groups
+// AUDIT_NAV_ITEMS under one expandable parent in the sidebar — it has no
+// page of its own (no combined /audits route), so it's assembled directly
+// in AppSidebar rather than added as a NAV_ITEMS entry.
+export const AUDIT_AGENTS_LABEL = "Audit Agents";
 
 // Maps the URL segment right after /dashboard/apps/[id]/ to a section.
 // No segment (i.e. the legacy strategy-approval index route) has no nav match.

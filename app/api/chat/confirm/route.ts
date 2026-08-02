@@ -97,6 +97,13 @@ export const POST = withErrorHandling(async (request: NextRequest) => {
 
   if (decision === "decline") {
     await supabaseAdmin.from("pending_chat_actions").update({ status: "cancelled" }).eq("id", pending.id);
+    // No-op for ordinary mutating tools (no matching row) — only tools in
+    // PROACTIVE_OFFER_TOOLS ever get a chat_action_suggestions row created
+    // for them in the first place. See lib/chat/tools.ts.
+    await supabaseAdmin
+      .from("chat_action_suggestions")
+      .update({ status: "dismissed" })
+      .eq("pending_action_id", pending.id);
     await appendToolResult(pending.conversation_id, workspaceId, pending.tool_use_id, "Declined by the user.");
     return NextResponse.json({ success: true }, { status: 200 });
   }
@@ -137,6 +144,10 @@ export const POST = withErrorHandling(async (request: NextRequest) => {
   });
 
   await supabaseAdmin.from("pending_chat_actions").update({ status: "executed" }).eq("id", pending.id);
+  await supabaseAdmin
+    .from("chat_action_suggestions")
+    .update({ status: "confirmed" })
+    .eq("pending_action_id", pending.id);
   await appendToolResult(
     pending.conversation_id,
     workspaceId,

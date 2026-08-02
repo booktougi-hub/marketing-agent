@@ -50,7 +50,7 @@ export function AppConversionView({
   planTier,
   agentCreditsUsedThisWeek,
   agentCreditsResetAt,
-  lastAgentActionAt,
+  agentActionCooldowns,
   firstAuditCompletedAt,
 }: {
   appId: string;
@@ -58,7 +58,7 @@ export function AppConversionView({
   planTier: PlanTier;
   agentCreditsUsedThisWeek: number;
   agentCreditsResetAt: string | null;
-  lastAgentActionAt: string | null;
+  agentActionCooldowns: Record<string, string> | null;
   firstAuditCompletedAt: string | null;
 }) {
   const [findings, setFindings] = useState(initialFindings);
@@ -132,7 +132,7 @@ export function AppConversionView({
         planTier={planTier}
         agentCreditsUsedThisWeek={agentCreditsUsedThisWeek}
         agentCreditsResetAt={agentCreditsResetAt}
-        lastAgentActionAt={lastAgentActionAt}
+        agentActionCooldowns={agentActionCooldowns}
         firstRun={
           firstAuditCompletedAt
             ? { completed: true, completedAt: firstAuditCompletedAt }

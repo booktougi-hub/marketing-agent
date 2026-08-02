@@ -47,7 +47,7 @@ export function AppOnboardingView({
   planTier,
   agentCreditsUsedThisWeek,
   agentCreditsResetAt,
-  lastAgentActionAt,
+  agentActionCooldowns,
   firstAuditCompletedAt,
 }: {
   appId: string;
@@ -55,7 +55,7 @@ export function AppOnboardingView({
   planTier: PlanTier;
   agentCreditsUsedThisWeek: number;
   agentCreditsResetAt: string | null;
-  lastAgentActionAt: string | null;
+  agentActionCooldowns: Record<string, string> | null;
   // Null both when no audit has ever run AND when the first run found zero
   // groundable findings (a real outcome — see trigger/onboarding-audit.ts).
   // The empty state below falls back to its generic "no results yet"
@@ -139,7 +139,7 @@ export function AppOnboardingView({
         planTier={planTier}
         agentCreditsUsedThisWeek={agentCreditsUsedThisWeek}
         agentCreditsResetAt={agentCreditsResetAt}
-        lastAgentActionAt={lastAgentActionAt}
+        agentActionCooldowns={agentActionCooldowns}
         firstRun={
           firstAuditCompletedAt
             ? { completed: true, completedAt: firstAuditCompletedAt }

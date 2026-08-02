@@ -42,7 +42,20 @@ const icpResponseSchema = z.object({
   apollo_filters: apolloFiltersSchema,
 });
 
+// Reasoning framework swapped for .claude/skills/customer-research/SKILL.md
+// + .claude/skills/product-marketing/SKILL.md combined, condensed for the
+// SYNTHESIS tier this job runs on (see CLAUDE_MODEL comment above) — same
+// pattern as the Audits-family jobs (trigger/pricing-audit.ts:79 etc.).
+const ICP_FRAMEWORK = `=== CORE FRAMEWORK (apply this reasoning, do not just restate it) ===
+
+1. A PERSONA IS NOT AN AVERAGE — build the ICP from the sharpest-fit segment the DNA/personas actually support, not a blend broad enough to cover every possible buyer. A profile that represents everyone represents no one, and Apollo filters built that way return noisy, unusable lists.
+2. JOBS TO BE DONE — ground "summary" in the specific outcome this buyer is trying to achieve (the concrete task or result), not just a title/seniority label restated in prose.
+3. PUSH/PULL SWITCHING DYNAMICS — a real ICP is also defined by what pushes this buyer away from their current approach and what pulls them toward this product specifically; where the DNA or personas hint at either, that belongs in "summary", not a generic persona restatement.
+4. THE EXCLUSION IS PART OF THE PROFILE — an ICP is inherently exclusionary: who this product is clearly not for is as load-bearing as who it is for. When a founder-submitted exclusion is given, treat it as a hard filter on "apollo_filters", not just a note in the summary.`;
+
 const SYSTEM_PROMPT = `You infer a software product's Ideal Customer Profile (ICP) from its DNA and marketing personas, for cold outreach targeting.
+
+${ICP_FRAMEWORK}
 
 Respond with ONLY a JSON object matching this exact shape — no prose, no markdown code fences:
 {

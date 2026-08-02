@@ -12,7 +12,7 @@ import {
   getCooldownHoursRemaining,
   getRemainingCredits,
 } from "@/lib/agentCredits";
-import type { AgentActionType } from "@/lib/agentCredits";
+import type { AgentActionCooldowns, AgentActionType } from "@/lib/agentCredits";
 import type { PlanTier } from "@/types";
 
 function formatLocal(date: Date) {
@@ -36,7 +36,7 @@ export function AgentActionEmptyState({
   planTier,
   agentCreditsUsedThisWeek,
   agentCreditsResetAt,
-  lastAgentActionAt,
+  agentActionCooldowns,
   firstRun,
   nextRunAt,
 }: {
@@ -45,7 +45,7 @@ export function AgentActionEmptyState({
   planTier: PlanTier;
   agentCreditsUsedThisWeek: number;
   agentCreditsResetAt: string | null;
-  lastAgentActionAt: string | null;
+  agentActionCooldowns: AgentActionCooldowns | null;
   // Only meaningful for actions that also fire automatically on approval —
   // omit for actions with no first-run concept (cold email prospecting).
   firstRun?: { completed: boolean; completedAt: string | null };
@@ -69,7 +69,7 @@ export function AgentActionEmptyState({
   };
   const { remaining } = getRemainingCredits(creditFields, planTier);
   const afford = canAffordAction(creditFields, actionType, planTier);
-  const cooldownHoursRemaining = getCooldownHoursRemaining(lastAgentActionAt);
+  const cooldownHoursRemaining = getCooldownHoursRemaining(agentActionCooldowns, actionType);
   const cost = AGENT_ACTION_COST[actionType];
 
   async function handleRun() {

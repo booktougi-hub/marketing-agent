@@ -6,6 +6,7 @@ import { callExternalService, ExternalServiceError } from "@/lib/errors/AppError
 import { ErrorMessages } from "@/lib/errors/messages";
 import { createAnthropicClient } from "@/lib/anthropic-client";
 import { createFirecrawlClient, SCRAPE_TIMEOUT_MS } from "@/lib/firecrawl-client";
+import { discoverAndScrapeSecondaryPages } from "@/lib/site-crawl";
 import { MODELS } from "@/lib/ai/models";
 import type { BrandExtractionSource } from "@/types";
 
@@ -104,32 +105,6 @@ Critical rule: this data feeds downstream content generation and GEO (AI-search)
 
 Do not attempt: words to avoid, a writing sample, claims to avoid, target regions, brand colors, fonts, or logo/screenshot images — none of these can be reliably read off page text, so they are not part of this extraction and are handled separately.`;
 
-// Same regex-link-scan idiom as trigger/pricing-audit.ts's findPricingLinks —
-// generalized here so About and Pricing discovery share one implementation.
-function findLinksByKeywords(markdown: string, baseUrl: string, keywords: string[], limit: number): string[] {
-  const linkPattern = /\[([^\]]*)\]\((https?:\/\/[^\s)]+|\/[^\s)]*)\)/gi;
-  const seen = new Set<string>();
-  const urls: string[] = [];
-
-  for (const match of markdown.matchAll(linkPattern)) {
-    const linkText = match[1].toLowerCase();
-    const rawUrl = match[2];
-    const isRelevant = keywords.some((kw) => linkText.includes(kw) || rawUrl.toLowerCase().includes(kw));
-    if (!isRelevant) continue;
-
-    try {
-      const resolved = new URL(rawUrl, baseUrl).toString();
-      if (seen.has(resolved)) continue;
-      seen.add(resolved);
-      urls.push(resolved);
-    } catch {
-      // Malformed link — skip rather than fail the whole scrape.
-    }
-  }
-
-  return urls.slice(0, limit);
-}
-
 export const brandInfoExtraction = schemaTask({
   id: "brand-info-extraction",
   schema: payloadSchema,
@@ -159,7 +134,7 @@ export const brandInfoExtraction = schemaTask({
       const anthropic = createAnthropicClient();
 
       let homepageMarkdown = "";
-      const secondaryPages: { url: string; markdown: string }[] = [];
+      let secondaryPages: { url: string; markdown: string }[] = [];
 
       try {
         logger.info("brand-info-extraction: scraping homepage", { websiteUrl });
@@ -172,36 +147,21 @@ export const brandInfoExtraction = schemaTask({
           homepageMarkdown = homepage.markdown;
           logger.info("brand-info-extraction: homepage scraped", { length: homepageMarkdown.length });
 
-          const aboutLinks = findLinksByKeywords(
+          // Scraped concurrently (not one-at-a-time) via the shared crawl
+          // helper — up to 3 candidate URLs each carrying their own
+          // SCRAPE_TIMEOUT_MS budget previously meant a sequential loop
+          // could nearly triple the job's wall-clock time for no reason,
+          // since none of these requests depend on each other.
+          secondaryPages = await discoverAndScrapeSecondaryPages(
+            firecrawl,
             homepageMarkdown,
             websiteUrl,
-            ["about", "team", "company"],
-            MAX_ABOUT_PAGES_TO_SCRAPE
+            [
+              { label: "about", keywords: ["about", "team", "company"], limit: MAX_ABOUT_PAGES_TO_SCRAPE },
+              { label: "pricing", keywords: ["pricing", "plans", "price"], limit: MAX_PRICING_PAGES_TO_SCRAPE },
+            ],
+            "brand-info-extraction"
           );
-          const pricingLinks = findLinksByKeywords(
-            homepageMarkdown,
-            websiteUrl,
-            ["pricing", "plans", "price"],
-            MAX_PRICING_PAGES_TO_SCRAPE
-          );
-
-          for (const url of [...aboutLinks, ...pricingLinks]) {
-            try {
-              const scraped = await firecrawl.scrapeUrl(url, {
-                formats: ["markdown"],
-                timeout: SCRAPE_TIMEOUT_MS,
-              });
-              if ("markdown" in scraped && scraped.markdown && scraped.markdown.trim().length > 40) {
-                secondaryPages.push({ url, markdown: scraped.markdown });
-                logger.info("brand-info-extraction: scraped secondary page", { url });
-              }
-            } catch (err) {
-              logger.warn("brand-info-extraction: failed to scrape secondary page, continuing", {
-                url,
-                error: err instanceof Error ? err.message : String(err),
-              });
-            }
-          }
         }
       } catch (err) {
         logger.warn("brand-info-extraction: homepage scrape failed, continuing with nothing to extract from", {
@@ -283,6 +243,7 @@ ${secondaryPages.map((p) => `=== ${p.url} ===\n${p.markdown}`).join("\n\n")}
       update.extraction_status = "complete";
       update.extraction_error = null;
       update.last_analyzed_at = new Date().toISOString();
+      update.pending_run_id = null;
 
       const { error: updateError } = await supabaseAdmin
         .from("brand_information")
@@ -314,7 +275,7 @@ ${secondaryPages.map((p) => `=== ${p.url} ===\n${p.markdown}`).join("\n\n")}
       const message = err instanceof Error ? err.message : ErrorMessages.generic.UNKNOWN;
       await supabaseAdmin
         .from("brand_information")
-        .update({ extraction_status: "error", extraction_error: message })
+        .update({ extraction_status: "error", extraction_error: message, pending_run_id: null })
         .eq("app_id", app_id)
         .eq("workspace_id", workspace_id);
 

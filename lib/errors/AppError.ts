@@ -100,6 +100,19 @@ export class InternalError extends AppError {
 // Only applied at call sites that are already fatal-on-failure; call sites
 // that already treat a failure as non-fatal (logged and continued) are left
 // alone so this never turns a soft-fail into a hard-fail.
+//
+// ExternalServiceError is `isOperational: true` (the default), so
+// handleApiError (lib/errors/apiHandler.ts) treats it as an expected
+// failure and never logs or reports it — deliberately, since a transient
+// rate limit or network blip on a third-party API isn't an incident. But
+// that also meant the ORIGINAL error — the one specific piece of
+// information that actually explains why a given call failed — was
+// discarded entirely, with nothing surfaced anywhere: chasing down a real
+// bug behind this generic message meant reproducing the failure by hand
+// from scratch rather than reading a log. Logging it here keeps the
+// "operational, don't alert on every occurrence" classification for the
+// wrapped error the caller sees, while still making the real cause visible
+// in server logs for whoever has to debug the next one.
 export async function callExternalService<T>(
   service: string,
   message: string,
@@ -109,6 +122,7 @@ export async function callExternalService<T>(
     return await fn();
   } catch (err) {
     if (err instanceof AppError) throw err;
+    console.error(`[EXTERNAL SERVICE ERROR] ${service}`, err);
     throw new ExternalServiceError(message, service);
   }
 }

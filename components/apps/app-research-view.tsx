@@ -382,7 +382,7 @@ export function AppResearchView({
   planTier,
   agentCreditsUsedThisWeek,
   agentCreditsResetAt,
-  lastAgentActionAt,
+  agentActionCooldowns,
   firstResearchCompleted,
   firstResearchCompletedAt,
   preferredResearchDay,
@@ -402,7 +402,7 @@ export function AppResearchView({
   planTier: PlanTier;
   agentCreditsUsedThisWeek: number;
   agentCreditsResetAt: string | null;
-  lastAgentActionAt: string | null;
+  agentActionCooldowns: Record<string, string> | null;
   firstResearchCompleted: boolean;
   firstResearchCompletedAt: string | null;
   preferredResearchDay: ResearchDay;
@@ -526,7 +526,7 @@ export function AppResearchView({
             planTier={planTier}
             agentCreditsUsedThisWeek={agentCreditsUsedThisWeek}
             agentCreditsResetAt={agentCreditsResetAt}
-            lastAgentActionAt={lastAgentActionAt}
+            agentActionCooldowns={agentActionCooldowns}
             firstRun={{ completed: firstResearchCompleted, completedAt: firstResearchCompletedAt }}
             nextRunAt={nextWeeklyResearchRun}
           />
@@ -552,7 +552,7 @@ export function AppResearchView({
             planTier={planTier}
             agentCreditsUsedThisWeek={agentCreditsUsedThisWeek}
             agentCreditsResetAt={agentCreditsResetAt}
-            lastAgentActionAt={lastAgentActionAt}
+            agentActionCooldowns={agentActionCooldowns}
             firstRun={{ completed: firstResearchCompleted, completedAt: firstResearchCompletedAt }}
             nextRunAt={nextWeeklyResearchRun}
           />
@@ -601,7 +601,7 @@ export function AppResearchView({
               planTier={planTier}
               agentCreditsUsedThisWeek={agentCreditsUsedThisWeek}
               agentCreditsResetAt={agentCreditsResetAt}
-              lastAgentActionAt={lastAgentActionAt}
+              agentActionCooldowns={agentActionCooldowns}
               firstRun={{ completed: firstResearchCompleted, completedAt: firstResearchCompletedAt }}
               nextRunAt={nextCompetitorScanRun}
             />

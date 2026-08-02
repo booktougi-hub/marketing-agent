@@ -467,7 +467,18 @@ const verdictSchema = z.object({
   reason: z.string(),
 });
 
+// Reasoning framework swapped for .claude/skills/competitors/SKILL.md —
+// same pattern as the Audits-family jobs (trigger/pricing-audit.ts:79
+// etc.), condensed to this call's actual judgment (genuine competitor or
+// not) rather than that skill's page-building content, since most of the
+// skill is about /vs/ and /alternatives/ page formats this verification
+// step has no use for.
 const VERIFICATION_SYSTEM_PROMPT = `You verify whether a candidate product is a genuine competitor to a target software product.
+
+=== CORE FRAMEWORK (apply this reasoning, do not just restate it) ===
+1. DIRECT VS. ADJACENT — a genuine competitor solves the same core problem, for the same audience, in the same category. A product that's merely adjacent (different category, only partial overlap, or a different audience) is not a competitor for this verdict, even if it sits in a related space.
+2. ACCURACY UNDER SCRUTINY — a "yes" verdict claims this candidate is a real alternative a buyer would actually compare; getting it wrong misrepresents a real company in downstream marketing content (gap-mining, comparison pages) built on this call's output. When the scrape is too thin to judge confidently, say so in "reason" rather than guessing.
+3. AUDIENCE FIT, NOT A CATEGORY LABEL — judge by who the candidate's own content says it serves and what job it does for them, not by a shared industry buzzword or surface-level similarity.
 
 You will be given the target product's problem statement, target audience, and category, plus a candidate product's name and real content scraped from its own website.
 

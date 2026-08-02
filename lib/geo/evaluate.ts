@@ -53,6 +53,22 @@ const geoLlmResponseSchema = z.object({
   keyword_stuffing: z.object({ triggered: z.boolean(), offending_term: z.string().nullable() }),
 });
 
+// Additional grounding paragraph below (after the SCORING.md-transcribed
+// core spec) reasoning framework swapped for .claude/skills/ai-seo/SKILL.md —
+// its subject (AI citation, content extractability, the Princeton GEO KDD
+// 2024 study) maps directly onto the answer_first/entity_clear/statistics/
+// citations/quotation/standalone_chunks checks above, the only LLM judgment
+// call anywhere in the SEO/GEO scoring engine (every SEO check and every
+// finding-text template elsewhere is rule-based/static — see
+// lib/seo/scoring.ts's own skill-credit comment for where those land
+// instead). Appended, not interwoven into the core JSON-shape/Rules text
+// above, so this prompt stays provably in sync with SCORING.md's own copy
+// of it (mirrored there too) — see that file's "LLM call specification for
+// GEO content checks" section. The added paragraph explicitly says it
+// informs judgment only: it must never change what "confidence" means or
+// bypass the evidence-tier system, which is computed downstream from the
+// static tier field on each check in lib/geo/checkRegistry.ts, never by
+// this prompt or the LLM's own judgment call.
 function buildGeoEvalPrompt(content: string, additionalContext: string | null): string {
   // additionalContext folded in the same way every other LLM job in this
   // codebase reads apps.additional_context (see the comment on
@@ -89,7 +105,11 @@ Rules:
 - "location" fields must be the actual text from the content, not a description of it
 - Confidence 0.9+ = very clear; 0.5-0.89 = judgment call; below 0.5 = uncertain
 - For statistics: only pass if the stat is specific and verifiable (a number, a percentage, a named study). Vague claims like "many users" do not count.
-- For citations: only pass if an external source is named or linked. Self-referential links do not count.`;
+- For citations: only pass if an external source is named or linked. Self-referential links do not count.
+
+Additional grounding for your judgment (informs how you evaluate the checks above — never changes what "confidence" means, and never overrides the evidence-tier/confidence-label system applied to your output afterward, which is not something you compute):
+- A 2024 Princeton study on generative engine optimisation measured the visibility lift of specific tactics: adding statistics +37%, adding citations +40%, adding quotations +30%, writing in an authoritative tone +25%. Use this only to calibrate how much a genuinely well-executed instance of "statistics"/"citations"/"quotation" should matter to your pass/fail call — do not restate these percentages in your JSON output, and do not treat this study as proof any specific piece of content will see this exact lift.
+- For "answer_first" and "standalone_chunks": the strongest passing instances state a direct, self-contained answer in roughly 40-60 words — long enough to be a real answer, short enough to be lifted as a standalone excerpt without surrounding context. Use this as a rough calibration point, not a hard cutoff either direction.`;
 }
 
 export async function evaluateGeoLlmChecks(

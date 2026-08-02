@@ -33,7 +33,7 @@ export default async function AppOpportunitiesPage({
       supabaseAdmin
         .from("apps")
         .select(
-          "id, name, source_url, agent_credits_used_this_week, agent_credits_reset_at, last_agent_action_at, first_research_completed, first_research_completed_at, preferred_research_day, preferred_research_hour"
+          "id, name, source_url, agent_credits_used_this_week, agent_credits_reset_at, agent_action_cooldowns, first_research_completed, first_research_completed_at, preferred_research_day, preferred_research_hour"
         )
         .eq("id", id)
         .eq("workspace_id", workspaceId)
@@ -74,7 +74,7 @@ export default async function AppOpportunitiesPage({
         planTier={(workspace?.plan_tier ?? "free") as PlanTier}
         agentCreditsUsedThisWeek={app.agent_credits_used_this_week}
         agentCreditsResetAt={app.agent_credits_reset_at}
-        lastAgentActionAt={app.last_agent_action_at}
+        agentActionCooldowns={app.agent_action_cooldowns}
         firstResearchCompleted={app.first_research_completed}
         firstResearchCompletedAt={app.first_research_completed_at}
         preferredResearchDay={app.preferred_research_day as ResearchDay}

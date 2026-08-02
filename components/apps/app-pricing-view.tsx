@@ -51,7 +51,7 @@ export function AppPricingView({
   planTier,
   agentCreditsUsedThisWeek,
   agentCreditsResetAt,
-  lastAgentActionAt,
+  agentActionCooldowns,
   firstAuditCompletedAt,
 }: {
   appId: string;
@@ -59,7 +59,7 @@ export function AppPricingView({
   planTier: PlanTier;
   agentCreditsUsedThisWeek: number;
   agentCreditsResetAt: string | null;
-  lastAgentActionAt: string | null;
+  agentActionCooldowns: Record<string, string> | null;
   firstAuditCompletedAt: string | null;
 }) {
   const [findings, setFindings] = useState(initialFindings);
@@ -133,7 +133,7 @@ export function AppPricingView({
         planTier={planTier}
         agentCreditsUsedThisWeek={agentCreditsUsedThisWeek}
         agentCreditsResetAt={agentCreditsResetAt}
-        lastAgentActionAt={lastAgentActionAt}
+        agentActionCooldowns={agentActionCooldowns}
         firstRun={
           firstAuditCompletedAt
             ? { completed: true, completedAt: firstAuditCompletedAt }

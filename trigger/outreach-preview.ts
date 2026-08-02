@@ -39,7 +39,26 @@ const emailResponseSchema = z.object({
   personalization_score: z.number().min(0).max(100),
 });
 
+// Reasoning framework swapped for .claude/skills/cold-email/SKILL.md +
+// .claude/skills/emails/SKILL.md combined, adapted the same way the
+// Audits-family jobs do (trigger/pricing-audit.ts:79 etc.) — the emails
+// skill is mostly about multi-touch lifecycle sequences, which don't apply
+// to this single one-off preview email, so only its single-email-shape
+// principles are pulled in; cold-email/SKILL.md supplies the dominant
+// framework since this call is a first-touch cold email specifically.
 const EMAIL_SYSTEM_PROMPT = `You write a single, fully personalized cold outreach email for a software product's founder to send to one specific prospect.
+
+=== CORE FRAMEWORK — COLD OUTREACH (apply this reasoning, do not just restate it) ===
+1. WRITE LIKE A PEER, NOT A VENDOR — this should read like it came from someone who understands the reader's world, not someone selling something. Favor "you/your" over "I/we", use contractions, and never open by explaining who you are or what your company does.
+2. PERSONALIZATION MUST CONNECT TO THE PROBLEM — apply the removal test: if you stripped out the personalized opening and the email still reads fine, the personalization isn't doing its job. It must lead naturally into why you're reaching out, not sit next to it as an unrelated compliment.
+3. EVERY SENTENCE EARNS ITS PLACE — a good cold email reads like it could have been shorter, not longer. Cut anything that doesn't move the reader toward replying.
+4. ONE ASK, LOW FRICTION — an interest-based question ("Worth exploring?", "Would this be useful?") beats a meeting request; one CTA, never a hard sell on a first touch.
+5. LET WHAT'S ACTUALLY KNOWN DRIVE THE STRUCTURE — pick whichever shape fits the specific detail available (an observation leading to the problem, a direct question, a trigger event leading to an insight) rather than forcing the same template regardless of what's known about this prospect.
+6. AVOID THE TELLS — no "I hope this email finds you well," no "My name is X and I work at Y," no marketing jargon ("leverage", "synergy", "best-in-class"), no feature dump. These read as templated and get deleted on sight.
+
+=== CORE FRAMEWORK — EMAIL STRUCTURE (adapted from lifecycle email principles, single email only) ===
+1. ONE EMAIL, ONE JOB — this email has exactly one purpose and one CTA; don't try to introduce the product, build trust, and ask for a reply all in the same message.
+2. HOOK → CONTEXT → VALUE → ASK — the shape underneath "body": a first line that earns attention, why this matters to this specific reader, the concrete detail that makes it worth their time, then the ask.
 
 You will be given the product's DNA and the prospect's name/title/company, plus — if available — a specific trigger event or real detail about them or their company.
 

@@ -18,7 +18,9 @@ export type AgentActionType =
   | "pricing_audit"
   | "diagnosis_refresh"
   | "seo_audit"
-  | "brand_info_extraction";
+  | "brand_info_extraction"
+  | "dna_reextraction"
+  | "competitor_profile_research";
 
 // 999 stands in for "unlimited" so the same numeric comparison works for
 // every plan. `agency` isn't in the product spec (only free/solo/growth/
@@ -46,7 +48,20 @@ export const AGENT_ACTION_COST: Record<AgentActionType, number> = {
   diagnosis_refresh: 2,
   seo_audit: 2,
   brand_info_extraction: 2,
+  dna_reextraction: 2,
+  // Higher than the other Firecrawl+Claude extraction jobs — this one
+  // scrapes and synthesizes up to 3 separate competitor sites in one run
+  // (each its own multi-page crawl), not just the founder's own site.
+  competitor_profile_research: 3,
 };
+
+// One entry per AgentActionType, keyed by actionType, value = ISO timestamp
+// of the last time that specific action was triggered for the app. Replaces
+// the single flat `last_agent_action_at` timestamp (2026-07-29) — that
+// column is still on the table but no longer written to; every action type
+// now cools down independently instead of one action blocking every other
+// unrelated one for 6 hours.
+export type AgentActionCooldowns = Partial<Record<AgentActionType, string>>;
 
 export const AGENT_ACTION_LABEL: Record<AgentActionType, string> = {
   topic_and_problem_research: "Topic & Problem Research",
@@ -60,6 +75,8 @@ export const AGENT_ACTION_LABEL: Record<AgentActionType, string> = {
   diagnosis_refresh: "Diagnosis Refresh Check",
   seo_audit: "SEO Audit",
   brand_info_extraction: "Brand Identity Re-analysis",
+  dna_reextraction: "Product Information Re-analysis",
+  competitor_profile_research: "Competitor Research",
 };
 
 // cold_email_prospecting stays hard-gated by tier regardless of credits —
@@ -127,13 +144,19 @@ export function canAffordAction(
   return { allowed: true };
 }
 
-// Applies per-app across every action type (not per-action-type) — running
-// a competitor scan and then immediately a forum scan is still blocked by
-// the same cooldown, same as the single manual-research trigger used to
-// enforce before this system unified the four action types into one pool.
-export function getCooldownHoursRemaining(lastAgentActionAt: string | null): number {
-  if (!lastAgentActionAt) return 0;
-  const msSinceLast = Date.now() - new Date(lastAgentActionAt).getTime();
+// Per-action-type — running a competitor scan and then immediately a forum
+// scan no longer blocks on each other; each action type has its own 6h
+// timer. Was app-wide (any action blocked every other action) until
+// 2026-07-29, when that turned out to mean re-analyzing Product Information
+// and then Brand Identity minutes apart — two unrelated features — hit the
+// same cooldown.
+export function getCooldownHoursRemaining(
+  cooldowns: AgentActionCooldowns | null | undefined,
+  actionType: AgentActionType
+): number {
+  const lastRunAt = cooldowns?.[actionType];
+  if (!lastRunAt) return 0;
+  const msSinceLast = Date.now() - new Date(lastRunAt).getTime();
   if (msSinceLast >= AGENT_ACTION_COOLDOWN_MS) return 0;
   return Math.ceil((AGENT_ACTION_COOLDOWN_MS - msSinceLast) / (60 * 60 * 1000));
 }

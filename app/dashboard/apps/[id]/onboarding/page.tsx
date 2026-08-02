@@ -26,7 +26,7 @@ export default async function AppOnboardingPage({
     await Promise.all([
       supabaseAdmin
         .from("apps")
-        .select("id, name, agent_credits_used_this_week, agent_credits_reset_at, last_agent_action_at")
+        .select("id, name, agent_credits_used_this_week, agent_credits_reset_at, agent_action_cooldowns")
         .eq("id", id)
         .eq("workspace_id", workspaceId)
         .single(),
@@ -72,7 +72,7 @@ export default async function AppOnboardingPage({
         planTier={(workspace?.plan_tier ?? "free") as PlanTier}
         agentCreditsUsedThisWeek={app.agent_credits_used_this_week}
         agentCreditsResetAt={app.agent_credits_reset_at}
-        lastAgentActionAt={app.last_agent_action_at}
+        agentActionCooldowns={app.agent_action_cooldowns}
         firstAuditCompletedAt={firstFinding?.created_at ?? null}
       />
     </div>

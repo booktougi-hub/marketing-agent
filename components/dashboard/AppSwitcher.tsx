@@ -49,9 +49,22 @@ const STATUS_DOT_CLASS: Record<AppStatus, string> = {
 export function AppSwitcher({
   className,
   collapsed = false,
+  id,
 }: {
   className?: string;
   collapsed?: boolean;
+  // Explicit, caller-supplied id for the trigger button — this component is
+  // mounted twice at once (TopBar's mobile switcher + AppSidebar's desktop
+  // one, toggled via responsive `md:` classes rather than a JS conditional,
+  // so both exist in the DOM simultaneously on every render). Left to its
+  // default, Base UI derives the trigger's id from React's useId(), which
+  // depends on the two instances' relative hook-call order; that order can
+  // diverge between the server-rendered HTML and the client's first
+  // hydration pass, producing a "server/client id mismatch" console error
+  // even though nothing about the markup is actually wrong. Passing a fixed
+  // id per call site sidesteps that instead of relying on auto-generated,
+  // order-dependent ids for a component known to render more than once.
+  id?: string;
 }) {
   const { apps, selectedApp, selectedAppId, activeSection } = useDashboardApp();
 
@@ -66,6 +79,7 @@ export function AppSwitcher({
   return (
     <DropdownMenu>
       <DropdownMenuTrigger
+        id={id}
         className={cn(
           "flex w-full min-w-0 items-center gap-2 rounded-lg py-1.5 text-left outline-none transition-colors hover:bg-accent/60 data-popup-open:bg-accent/60",
           collapsed ? "justify-center px-1.5" : "px-2",

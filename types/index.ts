@@ -64,13 +64,37 @@ export interface AppStoreUrls {
   app_store: string | null;
 }
 
+export interface AppDnaTechSignals {
+  model_or_stack_used: string | null;
+  supported_formats_or_languages: string[];
+  integrations: string[];
+  architecture_description: string | null;
+}
+
+export interface AppDnaBusinessModel {
+  narrative: string | null;
+  // 'brand_information' when brand_information.pricing_summary already
+  // existed for this app and this narrative just summarizes it (never a
+  // second independent guess at plan/price numbers — see Part 3 note in
+  // lib/dna-extraction-core.ts); 'dna_extraction_fallback' when
+  // brand_information hadn't been extracted yet and DNA extraction inferred
+  // this narrative directly from the crawled pages as a stand-in, to be
+  // superseded once Brand Identity extraction actually runs. null source
+  // means narrative is also null (nothing to attribute).
+  source: "brand_information" | "dna_extraction_fallback" | null;
+}
+
 export interface AppDna {
+  // Pipeline-critical fields — read directly (not just via
+  // JSON.stringify(dna)) by trigger/topic-research.ts, trigger/problem-
+  // discovery.ts, trigger/forum-opportunity-finder.ts, trigger/competitor-
+  // gap-analysis.ts, trigger/seo-geo-audit.ts, lib/competitor-discovery.ts,
+  // lib/discovery-query-builder.ts. Never rename/restructure these without
+  // updating every one of those call sites.
   name: string;
   tagline: string;
   problem: string;
-  features: string[];
   target_audience: string;
-  pricing: string;
   competitors: string[];
   tone: AppTone;
   additional_urls: string[];
@@ -82,7 +106,35 @@ export interface AppDna {
   // Optional because DNA rows extracted before this field existed won't
   // have it.
   app_store_urls?: AppStoreUrls;
+
+  // Product Information page depth (2026-07-29). All optional because DNA
+  // rows extracted before this change won't have them — UI and downstream
+  // consumers must treat them as possibly absent, not just possibly empty.
+  // `overview` is assembled in code from name/tagline/source_url (see
+  // lib/dna-extraction-core.ts), not a second independent LLM extraction of
+  // the same facts.
+  overview?: { name: string; website: string; one_liner: string };
+  what_it_does?: string | null; // detailed paragraph — must preserve specific numbers/named mechanisms verbatim, never paraphrased into vaguer language
+  key_features?: string[]; // supersedes the old flat `features` field (renamed — had zero other consumers); each entry preserves exact figures/named things verbatim
+  product_category?: string[]; // 2-4 category/vertical tags, e.g. ["AI security scanner", "developer security tool"]
+  product_type?: string | null; // Claude's own inferred classification from the crawled site (SaaS / mobile app / browser extension / API / ...) — distinct from `apps.product_type`, the user-editable dropdown
+  target_customers?: string | null; // more specific than target_audience — names actual tools/ecosystems/job functions the site mentions
+  primary_cta?: string | null; // exact CTA text on the site, e.g. "Try it free"
+  tech_signals?: AppDnaTechSignals; // only fields the site actually states — never inferred
+  business_model?: AppDnaBusinessModel; // see Part 3: never a second independent structured pricing extraction
 }
+
+// One entry per top-level AppDna key the Product Information page lets the
+// customer edit. Same shape/role as BrandExtractionSource — see that type's
+// comment — kept as its own alias (not reused directly) since the two track
+// different field sets on different tables.
+export type DnaExtractionSource = Partial<Record<string, ExtractionFieldSource>>;
+
+// Lifecycle of trigger/dna-reextraction.ts, the narrow Product-Information-
+// page re-extraction — deliberately separate from `apps.status` (the main
+// pipeline state machine) since this job never touches that column. Same
+// role as BrandExtractionStatus for brand_information.
+export type DnaReextractionStatus = "idle" | "processing" | "complete" | "error";
 
 // Shape not finalized yet — populated when the settings screen is built.
 // Untyped on purpose rather than guessing fields ahead of that work.
@@ -95,6 +147,25 @@ export interface App {
   source_url: string;
   product_type: ProductType;
   dna: AppDna | null;
+  // Tracks which top-level AppDna keys the customer has manually edited on
+  // the Product Information page, so trigger/dna-reextraction.ts (unlike
+  // the full pipeline's trigger/dna-extraction.ts, which always fully
+  // overwrites dna) never silently clobbers a hand-edited field.
+  dna_extraction_source: DnaExtractionSource | null;
+  dna_reextraction_status: DnaReextractionStatus;
+  dna_reextraction_error: string | null;
+  // Set whenever a dna-reextraction run is in flight, cleared by that job's
+  // own success/catch paths — lets trigger/job-watchdog.ts detect a run
+  // that expired/crashed/was canceled before it ever reached its own catch
+  // block, same pattern as brand_information.pending_run_id.
+  dna_reextraction_pending_run_id: string | null;
+  // Lifecycle of the on-demand "Research Competitors" action
+  // (trigger/competitor-profile-research.ts) — same independent-status-
+  // column pattern as dna_reextraction_* above, never touches `status`.
+  competitor_profile_status: CompetitorProfileStatus;
+  competitor_profile_error: string | null;
+  competitor_profile_pending_run_id: string | null;
+  competitor_profile_last_generated_at: string | null;
   icon_url: string | null;
   screenshot_url: string | null;
   status: AppStatus;
@@ -113,7 +184,15 @@ export interface App {
   pending_run_task: PendingRunTask | null;
   agent_credits_used_this_week: number;
   agent_credits_reset_at: string | null;
+  // Deprecated 2026-07-29 — superseded by agent_action_cooldowns below (one
+  // shared cooldown blocked every unrelated action type together, which
+  // wasn't the intent). Column kept on the table but no longer written to;
+  // safe to drop in a later migration.
   last_agent_action_at: string | null;
+  // { [actionType]: ISO timestamp of the last time that action ran } — see
+  // lib/agentCredits.ts's AgentActionCooldowns/getCooldownHoursRemaining for
+  // the typed shape and per-action-type cooldown logic.
+  agent_action_cooldowns: Record<string, string> | null;
   preferred_research_day: ResearchDay;
   preferred_research_hour: number;
   first_outreach_completed: boolean;
@@ -156,6 +235,21 @@ export interface DiagnosisData {
   confidence: DiagnosisConfidence;
 }
 
+export interface CompetitorPricingTier {
+  tier_name: string;
+  price: string;
+  key_inclusions: string;
+}
+
+export interface CompetitorCompetitiveImplications {
+  where_they_win: string | null;
+  where_we_win: string | null;
+  opportunities: string | null;
+  threats: string | null;
+}
+
+export type CompetitorProfileStatus = "idle" | "processing" | "complete" | "error";
+
 export interface CompetitorResearch {
   id: string;
   app_id: string;
@@ -166,6 +260,30 @@ export interface CompetitorResearch {
   pricing_notes: string | null;
   positioning_notes: string | null;
   created_at: string;
+  // Deep profile fields (2026-07-29), filled in by the on-demand "Research
+  // Competitors" action (trigger/competitor-profile-research.ts) — adapted
+  // from the .claude/skills/competitor-profiling template, Firecrawl-only
+  // (no SEO/backlink/review data, which would need a DataForSEO-equivalent
+  // integration this project doesn't have). Optional because rows from the
+  // original onboarding discovery (trigger/competitor-research.ts) — or a
+  // competitor whose deep research hasn't run yet — won't have them.
+  tagline?: string | null;
+  founded_year?: string | null;
+  headquarters?: string | null;
+  team_size_estimate?: string | null;
+  target_audience?: string | null;
+  positioning_angle?: string | null;
+  key_messaging_themes?: string[];
+  core_features?: string[];
+  notable_differentiators?: string[];
+  integrations?: string[];
+  pricing_tiers?: CompetitorPricingTier[];
+  billing_notes?: string | null;
+  free_trial?: string | null;
+  strengths?: string[];
+  weaknesses?: string[];
+  competitive_implications?: CompetitorCompetitiveImplications;
+  profile_generated_at?: string | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -725,6 +843,11 @@ export interface BrandInformation {
   extraction_source: BrandExtractionSource | null;
   extraction_status: BrandExtractionStatus;
   extraction_error: string | null;
+  // Set whenever a brand-info-extraction run is in flight, cleared by that
+  // job's own success/catch paths — lets trigger/job-watchdog.ts detect a
+  // run that expired/crashed/was canceled before it ever reached its own
+  // catch block, the same way it already does for apps.pending_run_id.
+  pending_run_id: string | null;
   last_analyzed_at: string | null;
   updated_at: string;
 }
@@ -779,5 +902,24 @@ export interface ChatDecline {
   app_id: string;
   workspace_id: string;
   user_message: string;
+  created_at: string;
+}
+
+// chat_action_suggestions — one row per confirm card rendered by a
+// "proactive offer" tool (today just add_content_to_plan — see
+// PROACTIVE_OFFER_TOOLS in lib/chat/tools.ts), logged 'offered' when the
+// card is shown and flipped to 'confirmed'/'dismissed' once the founder
+// acts on it. Same write-mostly, reviewed-later purpose as ChatDecline
+// above. No UI reads this table yet.
+export type ChatActionSuggestionStatus = "offered" | "confirmed" | "dismissed";
+
+export interface ChatActionSuggestion {
+  id: string;
+  conversation_id: string;
+  app_id: string;
+  workspace_id: string;
+  pending_action_id: string;
+  tool_name: string;
+  status: ChatActionSuggestionStatus;
   created_at: string;
 }
